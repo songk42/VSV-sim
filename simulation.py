@@ -37,6 +37,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
     if pDriv != 0 and pDriv != 1:
         pDriv *= (avg / (1 - pDriv + avg*pDriv))
 
+    # determine when particle changes states
     changeTime = np.array([], float)
     driven = {}
     sdf = 0.4
@@ -94,7 +95,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
     driv = np.array([], float)
     vd = np.array([], float)
     vh = np.array([], float)
-    prev = 0 # something to do with this is the problem with the data output (not the simulation itself)
+    prev = 0
 
     adj = 0 # adjustment in change-state times due to failure to jump previously
 
@@ -102,22 +103,20 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
     for t in np.arange(dt, tTot+dt, dt):
         t = np.round(t, 2)
         if driven[np.round(t, 2)]: # driven
-
-            # print("driven")
-
-            # temporary
             dr = random.gauss(2e-8, 2e-8)
-
             m = np.sqrt(x[-1]**2 + y[-1]**2)
+            # set direction (honestly probably not necessary every single time)
+            # I'm not convinced that m ever reaches 0
             if m < 1e-10:
                 theta = 2 * np.pi * random.random()
             else:
                 theta = np.arctan(y[-1]/x[-1])
-                # if random.random() <= 0.5:
                 if x[-1] < 0:
                     theta += np.pi
                 if rev:
                     theta += np.pi
+
+            # set tentative coordinates
             xtemp = x[-1] + dr * np.cos(theta)
             ytemp = y[-1] + dr * np.sin(theta)
 
@@ -131,16 +130,18 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
                 return x, y, True, exitTime, hop, driv, vd, vh
 
         else: # trap
+            # tentative coordinates
             xtemp = x[-1] - k*(x[-1]-xC)*dt/g + np.sqrt(2*D*dt) * random.gauss(0, 1)
             ytemp = y[-1] - k*(y[-1]-yC)*dt/g + np.sqrt(2*D*dt) * random.gauss(0, 1)
             
+            # particle must not enter the nucleus
             if np.sqrt(xtemp**2 + ytemp**2) < 5e-6:
                 return x, y, True, exitTime, hop, driv, vd, vh
-                # break
             
             x = np.append(x, xtemp)
             y = np.append(y, ytemp)
 
+            # change states from trap to something else
             if np.round(t-adj, 2) in changeTime:
                 if not driven[np.round(t+dt, 2)]:
                     dr = -1
@@ -162,20 +163,23 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
         x[-1] = (x[-1] + x[-2])/2
         y[-1] = (y[-1] + y[-2])/2
 
-        # noise?
+        # noise
         x[-1] += random.gauss(0, 2e-9)
         y[-1] += random.gauss(0, 2e-9)
 
+        # determine the direction of the next bout of driven motion
         if np.round(t-adj, 2) in changeTime:
             rev = random.random()<0.5
 
         veltmp = np.sqrt( (x[-1] - x[-2])**2 + (y[-1] - y[-2])**2 ) * 100
 
+        # store velocity information
         if driven[np.round(t, 2)]:
             vd = np.append(vd, veltmp)
         else:
             vh = np.append(vh, veltmp)
 
+        # distance traveled over the course of a particular state
         if np.round(t-adj, 2) in changeTime:
             tmp = np.sqrt((x[-1] - x[prev])**2 + (y[-1] - y[prev])**2)
             if driven[np.round(t, 2)]:
@@ -223,8 +227,9 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
 
     CELL = 1.502e-5
     NUC = 5e-6
-
-    dir = "/home/skim52/RSI/sim-data/{}/".format(dirname) # change
+ 
+    # change directory as needed
+    dir = "/home/skim52/RSI/sim-data/{}/".format(dirname)
     try:
         os.mkdir(dir)
     except:
@@ -238,6 +243,7 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg='white')
     canvas.grid(row=0, columnspan=3)
     canvas.create_rectangle(0, 0, WIDTH, HEIGHT, fill='black')
+    # cell, nucleus boundaries
     canvas.create_oval(x1-CELL*sc, y1-CELL*sc, x1+CELL*sc, y1+CELL*sc, outline='yellow')
     canvas.create_oval(x1-NUC*sc, y1-NUC*sc, x1+NUC*sc, y1+NUC*sc, outline='white')
 
@@ -293,11 +299,11 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
     pauseB = tk.Button(bot, text='Play', command=toggle, font=('arial', '30'))
     pauseB.grid(row=0, column=0)
 
-    r = 2
-    r=5
+    r = 5
     dt = 0.01
 
     vsv = []
+    # change path as necessary
     img = tk.PhotoImage(file="/home/skim52/RSI/code/dot-2.png")
     for i in range(n):
         vsv.append(canvas.create_image(x1, y1, image=img))
@@ -404,7 +410,7 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
 
 # run_graphics(4, 11)
 
-def fig4a(pDriv):
+def dispVsTime(pDriv):
     t = 1000
     gx=list(range(t))
     gy=[7.5]
@@ -416,7 +422,6 @@ def fig4a(pDriv):
     for j in range(n):
         b = True
         while b:
-            # should run graph this way for driven motion also maybe
             x, y, b, out0, out1, out2, out3, out4 = move(t, pDriv)
         print(len(x))
         for i in range(len(x)):
