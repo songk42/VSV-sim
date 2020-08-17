@@ -20,7 +20,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
     Kb = 1.38064852e-23 # Boltzmann constant
     T = 37 + 273.15 # K
     g = 6 * np.pi * eta * R
-    k = 1.5e-6 # spring constant; N/m
+    k = random.uniform(6e-7, 2.6e-6) # spring constant; N/m
     D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
 
     dt = 1e-2 # "framerate"
