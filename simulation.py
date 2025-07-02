@@ -1,7 +1,6 @@
 import numpy as np
 import random
 from matplotlib import pyplot as plt
-from numba import njit, jit
 import statistics as st
 import tkinter as tk
 import PIL.ImageGrab as ImageGrab
@@ -9,29 +8,39 @@ import time
 import os
 import csv
 
-# @jit
-def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
+eta = 0.006 # Pa-s
+R = 8.6e-8 # m
+Kb = 1.38064852e-23 # Boltzmann constant
+T = 37 + 273.15 # K
+g = 6 * np.pi * eta * R
+D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
+
+CELL_RADIUS = 1.502e-5  # radius of cell (m)
+NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
+TRAP_SIZE = 1.7e-7  # distance between traps (m)
+TIME_BETWEEN_STATES = 0.41  # average time between states (s)
+MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
+
+def move(
+    tTot,
+    pDriv=0.03,
+    trap_size=TRAP_SIZE,
+    avg=TIME_BETWEEN_STATES,
+    theta=0,
+    dt=1e-2,
+):
     '''tTot: maximum total amount of "cell time" this simulation is run
     pDriv: probability of driven motion as opposed to trap
-    ts: distance between traps (m)
+    trap_size: distance between traps (m)
     avg: average time between states'''
-    eta = 0.006 # Pa-s
-    R = 8.6e-8 # m
-    Kb = 1.38064852e-23 # Boltzmann constant
-    T = 37 + 273.15 # K
-    g = 6 * np.pi * eta * R
     k = random.uniform(6e-7, 2.6e-6) # spring constant; N/m
-    D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
 
-    dt = 1e-2 # "framerate"
-
-    # theta = 2 * np.pi * random.random()
-    x = np.array([7.5e-6 * np.cos(theta)])
-    y = np.array([7.5e-6 * np.sin(theta)])
+    x = np.array([CELL_RADIUS/2 * np.cos(theta)])
+    y = np.array([CELL_RADIUS/2 * np.sin(theta)])
     xC = x[0]
     yC = y[0]
 
-    ts /= 2
+    trap_radius = trap_size / 2
 
     # effective probability, b/c pDriv should be time-based and this program doesn't treat it as such
     if pDriv != 0 and pDriv != 1:
@@ -102,8 +111,8 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
     rev = False
     for t in np.arange(dt, tTot+dt, dt):
         t = np.round(t, 2)
-        if driven[np.round(t, 2)]: # driven
-            dr = random.gauss(2e-8, 2e-8)
+        if driven[t]: # driven
+            dr = random.gauss(MOTOR_PROTEIN_SPEED/dt, MOTOR_PROTEIN_SPEED/dt)
             m = np.sqrt(x[-1]**2 + y[-1]**2)
             # set direction (honestly probably not necessary every single time)
             # I'm not convinced that m ever reaches 0
@@ -121,7 +130,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
             ytemp = y[-1] + dr * np.sin(theta)
 
             # need to make sure particle doesn't go into nucleus
-            if np.sqrt(xtemp**2 + ytemp**2) >= 5e-6:
+            if np.sqrt(xtemp**2 + ytemp**2) >= NUCLEUS_RADIUS:
                 x = np.append(x, xtemp)
                 y = np.append(y, ytemp)
                 xC = x[-1]
@@ -135,7 +144,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
             ytemp = y[-1] - k*(y[-1]-yC)*dt/g + np.sqrt(2*D*dt) * random.gauss(0, 1)
             
             # particle must not enter the nucleus
-            if np.sqrt(xtemp**2 + ytemp**2) < 5e-6:
+            if np.sqrt(xtemp**2 + ytemp**2) < NUCLEUS_RADIUS:
                 return x, y, True, exitTime, hop, driv, vd, vh
             
             x = np.append(x, xtemp)
@@ -148,7 +157,7 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
                     while dr < 0:
                         # sdf = 1.19
                         sdf = 1.8
-                        dr = random.gauss(ts, sdf*ts) # idk what the SD should be
+                        dr = random.gauss(trap_radius, sdf*trap_radius) # idk what the SD should be
                     rand = 2
                     while np.abs(rand) > 1:
                         rand = random.gauss(0, 0.4)
@@ -188,14 +197,13 @@ def move(tTot, pDriv=0.03, ts=1.7e-7, avg=0.41, theta=0):
                 hop = np.append(hop, tmp)
             prev = len(x)
         
-        if np.sqrt(x[-1]**2+y[-1]**2) > 1.502e-5 and exitTime == -1:
+        if np.sqrt(x[-1]**2+y[-1]**2) > CELL_RADIUS and exitTime == -1:
             exitTime = t
-            # break # uncomment this line when running the graphics part of simulation
+            break
 
     # fi.close()
     # print(interstate)
     return x, y, False, exitTime, hop, driv, vd, vh
-
 
 
 def graph(tTot):
@@ -213,39 +221,43 @@ def graph(tTot):
     plt.plot(centerx, centery)
     plt.show()
     
-def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname="sim"):
+def run_simulation(
+    tTot,
+    n_particles=1,
+    write_to_ps=False,
+    pDriv=0.03,
+    trap_size=TRAP_SIZE,
+    avg=TIME_BETWEEN_STATES,
+    dirname="sim",
+):
     '''tTot: maximum total amount of "cell time" this simulation is run
     n: number of particles shown
-    psW: if true, write canvas as Postscript files
+    write_to_ps: if true, write canvas as Postscript files
     pDriv: probability of driven motion as opposed to trap
-    ts: size of trap (m)
+    trap_size: size of trap (m)
     avg: average time between states'''
     root = tk.Tk()
 
-    WIDTH = 1600
-    HEIGHT = 1600
-
-    CELL = 1.502e-5
-    NUC = 5e-6
+    WIDTH = 600
+    HEIGHT = 600
  
     # change directory as needed
-    dir = "/home/skim52/RSI/sim-data/{}/".format(dirname)
     try:
-        os.mkdir(dir)
+        os.mkdir(dirname)
     except:
         pass
 
     x1 = WIDTH / 2
     y1 = HEIGHT / 2
 
-    sc = 5e7
+    sc = 1e7
 
     canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg='white')
     canvas.grid(row=0, columnspan=3)
     canvas.create_rectangle(0, 0, WIDTH, HEIGHT, fill='black')
     # cell, nucleus boundaries
-    canvas.create_oval(x1-CELL*sc, y1-CELL*sc, x1+CELL*sc, y1+CELL*sc, outline='yellow')
-    canvas.create_oval(x1-NUC*sc, y1-NUC*sc, x1+NUC*sc, y1+NUC*sc, outline='white')
+    canvas.create_oval(x1-CELL_RADIUS*sc, y1-CELL_RADIUS*sc, x1+CELL_RADIUS*sc, y1+CELL_RADIUS*sc, outline='yellow')
+    canvas.create_oval(x1-NUCLEUS_RADIUS*sc, y1-NUCLEUS_RADIUS*sc, x1+NUCLEUS_RADIUS*sc, y1+NUCLEUS_RADIUS*sc, outline='white')
 
     timeL = tk.Label(root, font=('arial', '30'))
     timeL.grid(row=1, column=1)
@@ -263,24 +275,24 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
     coords = []
     dur = 0
     i = 0
-    nout = 0
-    exitTime = []
-    while i < n:
-        x, y, b, et, out0, out1, out2, out3 = move(tTot, pDriv, ts, avg, theta=2*np.pi*i/n)
+    n_exited = 0
+    exit_times = []
+    while i < n_particles:
+        x, y, throw_out, exit_time, _, _, _, _ = move(tTot, pDriv, trap_size, avg, theta=2*np.pi*i/n_particles)
         dur = max(len(x), dur)
-        if b:
-            i -= 1
-            print("throw out")
+        if throw_out:
+            print(f"throw out particle {i}")
+            continue
         else:
-            if et != -1:
-                nout += 1
-                exitTime.append(et)
+            if exit_time != -1:
+                n_exited += 1
+                exit_times.append(exit_time)
             coords.append([[xd*sc for xd in x], [yd*sc for yd in y]])
-            print(i)
-        i += 1
+            print(f"particle {i} done")
+            i += 1
 
-    print("{} out of {} exit the cell".format(nout, n))
-    print("Avg exit time: {:.2e}".format(np.mean(exitTime)))
+    print("{} out of {} exit the cell".format(n_exited, n_particles))
+    print("Avg exit time: {:.2e}".format(np.mean(exit_times)))
 
     bot = tk.Frame()
     bot.grid(row=2, columnspan=3)
@@ -304,8 +316,8 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
 
     vsv = []
     # change path as necessary
-    img = tk.PhotoImage(file="/home/skim52/RSI/code/dot-2.png")
-    for i in range(n):
+    img = tk.PhotoImage(file="dot-2.png")
+    for i in range(n_particles):
         vsv.append(canvas.create_image(x1, y1, image=img))
         canvas.move(vsv[i], coords[i][0][0], coords[i][1][0])
     timeL.config(text='Time: {:7.2f} s'.format(0))
@@ -332,13 +344,13 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
         nonlocal coords
         with open('coords.csv', 'w') as f:
             w=csv.writer(f, quoting=csv.QUOTE_NONE)
-            for i in range(n):
+            for i in range(n_particles):
                 for j in range(len(coords[i][0])):
                     # data: frame #, particle #, x, y
                     w.writerow([int(j), i, coords[i][0][j], coords[i][1][j]])
     csvB = tk.Button(bot, text='Export to CSV', command=writeToFile, font=('arial', '30'))
     csvB.grid(row=0, column=2)
-    if psW:
+    if write_to_ps:
         playBool.set(True)
         pauseB['text'] = 'PS'
         pauseB['state'] = 'disabled'
@@ -352,93 +364,25 @@ def run_graphics(tTot, n=1, psW=False, pDriv=0.03, ts=1.7e-7, avg=0.41, dirname=
     while t < dur:
         if not playBool.get():
             pauseB.wait_variable(playBool)
-        for k in range(n):
+        for k in range(n_particles):
             try:
                 canvas.move(vsv[k], coords[k][0][t] - coords[k][0][t-1], coords[k][1][t] - coords[k][1][t-1])
             except:
                 continue
         canvas.update()
         timeL.config(text='Time: {:7.2f} s'.format(t*0.01))
-        if psW:
-            # canvas.postscript(file="{}scene-{:03d}.ps".format(dir, t), colormode='color')
+        if write_to_ps:
             save_canvas("{}scene-{:03d}.tif".format(dir, t))
         else:
             time.sleep(dt)
         t += 1
-    if psW:
+    if write_to_ps:
         root.destroy()
     
     root.mainloop()
 
 
-# def analyze(tTot, n=1, pDriv=0.03, ts=1.7e-7, avg=0.41):
-#     '''tTot: maximum total amount of "cell time" this simulation is run
-#     n: number of particles shown
-#     pDriv: probability of driven motion as opposed to trap
-#     ts: size of trap (m)
-#     avg: average time between states'''
-#     coords = []
-#     dur = 0
-#     i = 0
-#     nout = 0
-#     exitTime = []
-#     while i < n:
-#         x, y, b, et = move(tTot, pDriv, ts, avg, theta=2*np.pi*i/n)
-#         dur = max(len(x), dur)
-#         if b:
-#             i -= 1
-#         else:
-#             if et != -1:
-#                 nout += 1
-#                 exitTime.append(et)
-#             coords.append([x, y])
-#         i += 1
-
-#     print("{} out of {} exit the cell".format(nout, n))
-#     msd = []
-#     for i in range(dur):
-#         temp = []
-#         for j in range(n):
-#             try:
-#                 temp.append(coords[j][0][i]**2 + coords[j][1][i]**2)
-#             except:
-#                 continue
-#         msd.append(np.mean(temp))
-#     taxis = [np.round(i/100, 2) for i in range(dur)]
-#     return taxis, msd, exitTime
-
-
-# run_graphics(4, 11)
-
-def dispVsTime(pDriv):
-    t = 1000
-    gx=list(range(t))
-    gy=[7.5]
-    n=100
-    tmp = [[] for i in range(t-1)]
-
-    f = open("coord{}".format(int(100*pDriv)), "w")
-
-    for j in range(n):
-        b = True
-        while b:
-            x, y, b, out0, out1, out2, out3, out4 = move(t, pDriv)
-        print(len(x))
-        for i in range(len(x)):
-            f.write("{} {}\n".format(x[i], y[i]))
-        f.write("---\n")
-        for i in range(t-1):
-            tmp[i].append((x[100*(i+1)-1]**2 + y[100*(i+1)-1]**2) ** 0.5)
-
-    f.close()
-
-    for l in tmp:
-        gy.append(np.mean(l) * 1e6)
-
-    gy = [k - 7.5 for k in gy]
-    print(gy)
-    plt.ylim(0, 8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Dist traveled (um)")
-    plt.scatter(gx, gy)
-    plt.show()
+if __name__ == "__main__":
+    run_simulation(
+        tTot=2000,
+    )
