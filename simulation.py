@@ -1,3 +1,5 @@
+import argparse
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import numpy as np
@@ -20,6 +22,37 @@ TRAP_DIST = 1.7e-7  # distance between traps (m)
 TRAP_SD = 2.1e-7  # standard deviation of trap distance (m)
 TIME_BETWEEN_STATES = 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation parameters"""
+    total_time: int = 2000
+    n_particles: int = 1
+    pDriv: float = 0.03
+    trap_dist: float = TRAP_DIST
+    time_between: float = TIME_BETWEEN_STATES
+    dt: float = 0.01
+    dirname: str = "sim"
+    width: int = 600
+    height: int = 600
+    record_frames: bool = False
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> 'SimulationConfig':
+        """Create configuration from command line arguments"""
+        return cls(
+            total_time=args.total_time,
+            n_particles=args.n_particles,
+            pDriv=args.pDriv,
+            trap_dist=args.trap_dist,
+            time_between=args.time_between,
+            dt=args.dt,
+            dirname=args.dirname,
+            width=args.width,
+            height=args.height,
+            record_frames=args.record_frames,
+        )
 
 
 class SimInfo(NamedTuple):
@@ -49,8 +82,6 @@ def move(
     y = np.array([CELL_RADIUS/2 * np.sin(theta)])
     xC = x[0]
     yC = y[0]
-
-    trap_radius = trap_dist / 2
 
     # effective probability, b/c pDriv should be time-based and this program doesn't treat it as such
     if pDriv != 0 and pDriv != 1:
