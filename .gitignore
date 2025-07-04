@@ -1,2 +1,4 @@
 __pycache__/
 coord-test/
+sim/
+.DS_Store
