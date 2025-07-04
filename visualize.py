@@ -1,12 +1,12 @@
 import os
 import sys
 
-import numpy as np
 import csv
+import numpy as np
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QLabel, QSlider, QFrame)
 from PySide6.QtCore import QTimer, Qt, QThread, Signal
-from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap, QFont
+from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap, QFont, QKeySequence, QShortcut
 
 import simulation as sim
 
@@ -121,19 +121,24 @@ class SimulationCanvas(QWidget):
         """Update particle positions for current frame"""
         if not self.coords:
             return
+        
+        # Clear previous trails
+        self.trails = [[] for _ in range(len(self.coords))]
             
         for i, coord in enumerate(self.coords):
             if frame_number < len(coord[0]):
-                # Store previous position for trail
-                if frame_number > 0:
-                    prev_x = self.radius_x + coord[0][frame_number-1] * self.scale_factor
-                    prev_y = self.radius_y + coord[1][frame_number-1] * self.scale_factor
-                    curr_x = self.radius_x + coord[0][frame_number] * self.scale_factor
-                    curr_y = self.radius_y + coord[1][frame_number] * self.scale_factor
-                    
-                    # Add to trail
-                    self.trails[i].append((prev_x, prev_y, curr_x, curr_y))
+                # Build complete trail up to current frame
+                for f in range(1, frame_number + 1):
+                    if f < len(coord[0]):
+                        prev_x = self.radius_x + coord[0][f-1] * self.scale_factor
+                        prev_y = self.radius_y + coord[1][f-1] * self.scale_factor
+                        curr_x = self.radius_x + coord[0][f] * self.scale_factor
+                        curr_y = self.radius_y + coord[1][f] * self.scale_factor
+                        
+                        # Add to trail
+                        self.trails[i].append((prev_x, prev_y, curr_x, curr_y))
                 
+                # Update current particle position
                 self.particle_positions[i] = [
                     self.radius_x + coord[0][frame_number] * self.scale_factor,
                     self.radius_y + coord[1][frame_number] * self.scale_factor
@@ -240,6 +245,48 @@ class Simulation(QMainWindow):
         self.init_ui(width, height)
         self.setup_timer()
         self.setup_hover_hints()
+        self.setup_keyboard_shortcuts()
+        
+    def setup_keyboard_shortcuts(self):
+        """Setup keyboard shortcuts"""
+        # Spacebar for play/pause
+        self.play_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.play_shortcut.activated.connect(self.toggle_play)
+        
+        # R for reset
+        self.reset_shortcut = QShortcut(QKeySequence("R"), self)
+        self.reset_shortcut.activated.connect(self.reset_animation)
+        
+        # T for toggle trails
+        self.trails_shortcut = QShortcut(QKeySequence("T"), self)
+        self.trails_shortcut.activated.connect(self.toggle_trails)
+        
+        # Left/Right arrows for frame stepping
+        self.prev_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self)
+        self.prev_frame_shortcut.activated.connect(self.step_backward)
+        
+        self.next_frame_shortcut = QShortcut(QKeySequence(Qt.Key_Right), self)
+        self.next_frame_shortcut.activated.connect(self.step_forward)
+        
+    def step_backward(self):
+        """Step one frame backward"""
+        if not self.simulation_ready or self.is_recording:
+            return
+        if self.frame_number > 0:
+            self.frame_number -= 1
+            self.canvas.update_frame(self.frame_number)
+            self.time_label.setText(f"Time: {self.frame_number * self.dt:7.2f} s")
+            self.frame_slider.setValue(self.frame_number)
+            
+    def step_forward(self):
+        """Step one frame forward"""
+        if not self.simulation_ready or self.is_recording:
+            return
+        if self.frame_number < self.max_n_steps - 1:
+            self.frame_number += 1
+            self.canvas.update_frame(self.frame_number)
+            self.time_label.setText(f"Time: {self.frame_number * self.dt:7.2f} s")
+            self.frame_slider.setValue(self.frame_number)
         
     def setup_hover_hints(self):
         """Setup hover hints for all controls"""
@@ -253,12 +300,12 @@ class Simulation(QMainWindow):
         
         # Store hint messages
         self.hints = {
-            self.play_button: "Start/stop automatic animation playback",
-            self.reset_button: "Reset animation to beginning and clear all trails",
-            self.trails_button: "Toggle visibility of particle movement trails",
+            self.play_button: "Start/stop automatic animation playback (Spacebar)",
+            self.reset_button: "Reset animation to beginning and clear all trails (R)",
+            self.trails_button: "Toggle visibility of particle movement trails (T)",
             self.export_button: "Export particle coordinates to CSV file",
             self.record_button: "Record animation frames as PNG files for video creation",
-            self.frame_slider: "Drag to navigate to any frame in the animation"
+            self.frame_slider: "Drag to navigate to any frame in the animation (Left/Right arrows)"
         }
     
     def eventFilter(self, obj, event):
