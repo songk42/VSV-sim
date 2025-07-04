@@ -39,14 +39,14 @@ def move(
     total_time,
     pDriv=0.03,
     trap_dist=TRAP_DIST,
-    avg=TIME_BETWEEN_STATES,
+    time_between=TIME_BETWEEN_STATES,
     theta=0,
     dt=1e-2,
 ) -> SimInfo:
     '''total_time: maximum total amount of "cell time" this simulation is run
     pDriv: probability of driven motion as opposed to trap
     trap_dist: distance between traps (m)
-    avg: average time between states'''
+    time_between: average time between states'''
     k = random.uniform(6e-7, 2.6e-6) # spring constant; N/m
 
     x = np.array([CELL_RADIUS/2 * np.cos(theta)])
@@ -58,7 +58,7 @@ def move(
 
     # effective probability, b/c pDriv should be time-based and this program doesn't treat it as such
     if pDriv != 0 and pDriv != 1:
-        pDriv *= (avg / (1 - pDriv + avg*pDriv))
+        pDriv *= (time_between / (1 - pDriv + time_between*pDriv))
 
     def set_state_duration(d):
         inc = -1
@@ -66,7 +66,7 @@ def move(
             if d:
                 inc = random.gauss(1, 1)
             else:
-                inc = random.gauss(avg, avg)
+                inc = random.gauss(time_between, time_between)
         return inc
 
     # determine when particle changes states
@@ -188,7 +188,7 @@ def graph(
     total_time,
     pDriv=0.03,
     trap_dist=TRAP_DIST,
-    avg=TIME_BETWEEN_STATES,
+    time_between=TIME_BETWEEN_STATES,
     theta=0,
     dt=1e-2,
 ):
@@ -197,7 +197,7 @@ def graph(
         total_time,
         pDriv=pDriv,
         trap_dist=trap_dist,
-        avg=avg,
+        time_between=time_between,
         theta=theta,
         dt=dt,
 )
@@ -214,171 +214,228 @@ def graph(
     plt.show()
 
 
-def run_simulation(
-    total_time,
-    n_particles=1,
-    write_to_ps=False,
-    pDriv=0.03,
-    trap_dist=TRAP_DIST,
-    avg=TIME_BETWEEN_STATES,
-    dirname="sim",
-):
-    '''
-    total_time: maximum total amount of "cell time" this simulation is run
-    n_particles: number of particles shown
-    write_to_ps: if true, write canvas as Postscript files
-    pDriv: probability of driven motion as opposed to trap
-    trap_dist: size of trap (m)
-    avg: average time between states
-    dirname: directory to save simulation files
-    '''
-    root = tk.Tk()
+class Simulation:
+    def __init__(
+        self,
+        total_time,
+        n_particles=1,
+        pDriv=0.03,
+        trap_dist=TRAP_DIST,
+        time_between=TIME_BETWEEN_STATES,
+        dt=0.01,
+        dirname="sim",
+        width=600,
+        height=600,
+        write_to_ps=False,
+    ):
+        '''
+        total_time: maximum total amount of "cell time" this simulation is run
+        n_particles: number of particles shown
+        pDriv: probability of driven motion as opposed to trap
+        trap_dist: size of trap (m)
+        time_between: average time between states
+        dt: time step for simulation
+        dirname: directory to save simulation files
+        width: width of canvas
+        height: height of canvas
+        write_to_ps: if true, write canvas as Postscript files
+        '''
+        self.root = tk.Tk()
 
-    WIDTH = 600
-    HEIGHT = 600
- 
-    # change directory as needed
-    try:
-        os.mkdir(dirname)
-    except:
-        pass
+        self.width = width
+        self.height = height
+    
+        self.radius_x = self.width / 2
+        self.radius_y = self.height / 2
 
-    x1 = WIDTH / 2
-    y1 = HEIGHT / 2
+        ### simulation settings ###
+        self.n_particles = n_particles
+        self.pDriv = pDriv
+        self.trap_dist = trap_dist
+        self.time_between = time_between
+        self.total_time = total_time
+        self.dt = dt
+        self.coords = []
+        self.vsv = []  # TODO difference between coords and vsv?
 
-    sc = 1e7
+        self.frame_number = 1  # current frame number for simulation
 
-    canvas = tk.Canvas(root, width=WIDTH, height=HEIGHT, bg='white')
-    canvas.grid(row=0, columnspan=3)
-    canvas.create_rectangle(0, 0, WIDTH, HEIGHT, fill='black')
-    # cell, nucleus boundaries
-    canvas.create_oval(x1-CELL_RADIUS*sc, y1-CELL_RADIUS*sc, x1+CELL_RADIUS*sc, y1+CELL_RADIUS*sc, outline='yellow')
-    canvas.create_oval(x1-NUCLEUS_RADIUS*sc, y1-NUCLEUS_RADIUS*sc, x1+NUCLEUS_RADIUS*sc, y1+NUCLEUS_RADIUS*sc, outline='white')
+        ### canvas settings ###
+        self.dirname = dirname
+        self.write_to_ps = write_to_ps
+        try:
+            os.mkdir(self.dirname)
+        except:
+            pass
 
-    timeL = tk.Label(root, font=('arial', '30'))
-    timeL.grid(row=1, column=1)
+        self.scale_factor = 1e7  # scale factor for the canvas
 
-    def save_canvas(fname):
-        nonlocal root
-        nonlocal canvas
-        x = root.winfo_rootx() + canvas.winfo_x()
-        y = root.winfo_rooty() + canvas.winfo_y()
-        xx = x + canvas.winfo_width()
-        yy = y + canvas.winfo_height()
+        self.canvas = tk.Canvas(self.root, width=self.width, height=self.height, bg='white')
+        self.canvas.grid(row=0, columnspan=3)
+        self.canvas.create_rectangle(0, 0, self.width, self.height, fill='black')
+        # cell, nucleus boundaries
+        self.canvas.create_oval(
+            self.radius_x-CELL_RADIUS*self.scale_factor,
+            self.radius_y-CELL_RADIUS*self.scale_factor,
+            self.radius_x+CELL_RADIUS*self.scale_factor,
+            self.radius_y+CELL_RADIUS*self.scale_factor,
+            outline='yellow'
+        )
+        self.canvas.create_oval(
+            self.radius_x-NUCLEUS_RADIUS*self.scale_factor,
+            self.radius_y-NUCLEUS_RADIUS*self.scale_factor,
+            self.radius_x+NUCLEUS_RADIUS*self.scale_factor,
+            self.radius_y+NUCLEUS_RADIUS*self.scale_factor,
+            outline='white'
+        )
+
+        self.time_label = tk.Label(self.root, font=('arial', '30'))
+        self.time_label.grid(row=1, column=1)
+
+        self.bot = tk.Frame()
+        self.bot.grid(row=2, columnspan=3)
+
+        self.pausetxt = tk.StringVar()
+        self.pausetxt.set("Play")
+        self.playing = tk.BooleanVar()
+        self.playing.set(False)
+
+        self.pauseB = tk.Button(self.bot, text='Play', command=self.toggle, font=('arial', '30'))
+        self.pauseB.grid(row=0, column=0)
+
+        self.resetB = tk.Button(self.bot, text='Reset', command=self.reset_canvas, font=('arial', '30'))
+        self.resetB.grid(row=0, column=1)
+
+        self.csvB = tk.Button(self.bot, text='Export to CSV', command=self.writeToFile, font=('arial', '30'))
+        self.csvB.grid(row=0, column=2)
+
+    # Trails: tag all lines so we can clear on reset
+    # code from @BenHoffman06
+    def draw_trail(self, prev_x, prev_y, new_x, new_y, color='white'):
+        self.canvas.create_line(prev_x, prev_y, new_x, new_y,
+                           fill=color, width=1, tags='trail')
+
+    # Reset trails and animation
+    def reset_canvas(self):
+        self.canvas.delete('trail')
+        for idx in range(self.n_particles):
+            curr = self.canvas.coords(self.vsv[idx])
+            target_x = self.radius_x + self.coords[idx][0][0]
+            target_y = self.radius_y + self.coords[idx][1][0]
+            self.canvas.move(self.vsv[idx], target_x - curr[0], target_y - curr[1])
+        self.frame_number = 1
+        self.time_label.config(text='Time:  0.00 s')
+        self.canvas.update()
+
+    def save_canvas(self, fname):
+        x = self.root.winfo_rootx() + self.canvas.winfo_x()
+        y = self.root.winfo_rooty() + self.canvas.winfo_y()
+        xx = x + self.canvas.winfo_width()
+        yy = y + self.canvas.winfo_height()
         ImageGrab.grab(bbox=(x, y, xx, yy)).save(fname)
 
-    # get coordinate information
-    coords = []
-    max_n_steps = 0
-    i = 0
-    n_exited = 0
-    exit_times = []
-    while i < n_particles:
-        x_coords, y_coords, throw_out, exit_time, _, _, _, _ = move(total_time, pDriv, trap_dist, avg, theta=2*np.pi*i/n_particles)
-        max_n_steps = max(len(x_coords), max_n_steps)
-        if throw_out:
-            print(f"throw out particle {i}")
-            continue
+    def toggle(self):
+        self.playing.set(not self.playing.get())
+        if self.playing.get():
+            self.pauseB['text'] = 'Pause'
         else:
-            if exit_time != -1:
-                n_exited += 1
-                exit_times.append(exit_time)
-            coords.append([[xd*sc for xd in x_coords], [yd*sc for yd in y_coords]])
-            print(f"particle {i} done")
-            i += 1
+            self.pauseB['text'] = 'Play'
 
-    print("{} out of {} exit the cell".format(n_exited, n_particles))
-    print("Avg exit time: {:.2e}".format(np.mean(exit_times)))
-
-    bot = tk.Frame()
-    bot.grid(row=2, columnspan=3)
-
-    pausetxt = tk.StringVar()
-    pausetxt.set("Play")
-    playBool = tk.BooleanVar()
-    playBool.set(False)
-    def toggle():
-        nonlocal playBool
-        playBool.set(not playBool.get())
-        if pauseB['text'] == 'Play':
-            pauseB['text'] = 'Pause'
-        else:
-            pauseB['text'] = 'Play'
-    pauseB = tk.Button(bot, text='Play', command=toggle, font=('arial', '30'))
-    pauseB.grid(row=0, column=0)
-
-    r = 5
-    dt = 0.01
-
-    vsv = []
-    # change path as necessary
-    img = tk.PhotoImage(file="dot-2.png")
-    for i in range(n_particles):
-        vsv.append(canvas.create_image(x1, y1, image=img))
-        canvas.move(vsv[i], coords[i][0][0], coords[i][1][0])
-    timeL.config(text='Time: {:7.2f} s'.format(0))
-    canvas.update()
-
-    t = 1
-    def reset():
-        nonlocal canvas
-        nonlocal coords
-        nonlocal x1
-        nonlocal y1
-        nonlocal vsv
-        nonlocal t
-        for i in range(len(vsv)):
-            c = canvas.coords(vsv[i])
-            canvas.move(vsv[i], x1 + coords[i][0][0] - c[0], y1 + coords[i][1][0] - c[1])
-        canvas.update()
-        timeL.config(text='Time: {:7.2f} s'.format(0))
-        t = 1
-    resetB = tk.Button(bot, text='Reset', command=reset, font=('arial', '30'))
-    resetB.grid(row=0, column=1)
-
-    def writeToFile():
-        nonlocal coords
-        with open(os.path.join(dirname, 'coords.csv'), 'w') as f:
+    def writeToFile(self):
+        with open(os.path.join(self.dirname, 'coords.csv'), 'w') as f:
             w=csv.writer(f, quoting=csv.QUOTE_NONE)
-            for i in range(n_particles):
-                for j in range(len(coords[i][0])):
+            for i in range(self.n_particles):
+                for j in range(len(self.coords[i][0])):
                     # data: frame #, particle #, x, y
-                    w.writerow([int(j), i, coords[i][0][j], coords[i][1][j]])
-    csvB = tk.Button(bot, text='Export to CSV', command=writeToFile, font=('arial', '30'))
-    csvB.grid(row=0, column=2)
-    if write_to_ps:
-        playBool.set(True)
-        pauseB['text'] = 'PS'
-        pauseB['state'] = 'disabled'
-        resetB['state'] = 'disabled'
-        csvB['state'] = 'disabled'
-        csvB['text'] = 'Can\'t export to CSV'
+                    w.writerow([int(j), i, self.coords[i][0][j], self.coords[i][1][j]])
 
-    time.sleep(1)
-    time.sleep(dt)
-
-    while t < max_n_steps:
-        if not playBool.get():
-            pauseB.wait_variable(playBool)
-        for k in range(n_particles):
-            try:
-                canvas.move(vsv[k], coords[k][0][t] - coords[k][0][t-1], coords[k][1][t] - coords[k][1][t-1])
-            except:
+    def run_simulation(self):
+        # get coordinate information
+        max_n_steps = 0
+        i = 0
+        n_exited = 0
+        exit_times = []
+        while i < self.n_particles:
+            x_coords, y_coords, throw_out, exit_time, _, _, _, _ = move(
+                self.total_time,
+                self.pDriv,
+                self.trap_dist,
+                self.time_between,
+                theta=2*np.pi*i/self.n_particles
+            )
+            max_n_steps = max(len(x_coords), max_n_steps)
+            if throw_out:
+                print(f"throw out particle {i}")
                 continue
-        canvas.update()
-        timeL.config(text='Time: {:7.2f} s'.format(t*0.01))
-        if write_to_ps:
-            save_canvas(os.path.join(dirname, f"scene-{t:03d}.tif"))
-        else:
-            time.sleep(dt)
-        t += 1
-    if write_to_ps:
-        root.destroy()
-    
-    root.mainloop()
+            else:
+                if exit_time != -1:
+                    n_exited += 1
+                    exit_times.append(exit_time)
+                self.coords.append([
+                    [xd*self.scale_factor for xd in x_coords],
+                    [yd*self.scale_factor for yd in y_coords]
+                ])
+                print(f"particle {i} done")
+                i += 1
+
+        print("{} out of {} exit the cell".format(n_exited, self.n_particles))
+        print("Avg exit time: {:.2e}".format(np.mean(exit_times)))
+
+        # change path as necessary
+        img = tk.PhotoImage(file="dot-2.png")
+        for i in range(self.n_particles):
+            self.vsv.append(self.canvas.create_image(self.radius_x, self.radius_y, image=img))
+            self.canvas.move(self.vsv[i], self.coords[i][0][0], self.coords[i][1][0])
+        self.time_label.config(text='Time: {:7.2f} s'.format(0))
+        self.canvas.update()
+
+        if self.write_to_ps:
+            self.playing.set(True)
+            self.pauseB['text'] = 'PS'
+            self.pauseB['state'] = 'disabled'
+            self.resetB['state'] = 'disabled'
+            self.csvB['state'] = 'disabled'
+            self.csvB['text'] = 'Can\'t export to CSV'
+
+        time.sleep(1)
+        time.sleep(self.dt)
+
+        while self.frame_number < max_n_steps:
+            if not self.playing.get():
+                self.pauseB.wait_variable(self.playing)
+            for k in range(self.n_particles):
+                try:
+                    self.canvas.move(
+                        self.vsv[k],
+                        self.coords[k][0][self.frame_number] - self.coords[k][0][self.frame_number-1],
+                        self.coords[k][1][self.frame_number] - self.coords[k][1][self.frame_number-1],
+                    )
+                except:
+                    continue
+            self.canvas.update()
+            self.time_label.config(text='Time: {:7.2f} s'.format(self.frame_number*0.01))
+            if self.write_to_ps:
+                self.save_canvas(os.path.join(self.dirname, f"scene-{self.frame_number:03d}.tif"))
+            else:
+                time.sleep(self.dt)
+            self.frame_number += 1
+        if self.write_to_ps:
+            self.root.destroy()
+
+        self.root.mainloop()
 
 
 if __name__ == "__main__":
-    run_simulation(
+    sim = Simulation(
         total_time=2000,
+        n_particles=1,
+        pDriv=0.03,
+        trap_dist=TRAP_DIST,
+        time_between=TIME_BETWEEN_STATES,
+        dt=0.01,
+        dirname="sim",
+        width=600,
+        height=600,
+        write_to_ps=False,
     )
+    sim.run_simulation()
