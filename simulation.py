@@ -1,3 +1,4 @@
+from typing import NamedTuple
 import numpy as np
 import random
 from matplotlib import pyplot as plt
@@ -7,6 +8,7 @@ import PIL.ImageGrab as ImageGrab
 import time
 import os
 import csv
+import tqdm
 
 eta = 0.006 # Pa-s
 R = 8.6e-8 # m
@@ -17,21 +19,33 @@ D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
 
 CELL_RADIUS = 1.502e-5  # radius of cell (m)
 NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
-TRAP_SIZE = 1.7e-7  # distance between traps (m)
+TRAP_SIZE = 2.4e-7  # size of trap (m)
+TRAP_DIST = 1.7e-7  # distance between traps (m)
+TRAP_SD = 2.1e-7  # standard deviation of trap distance (m)
 TIME_BETWEEN_STATES = 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
+
+class SimInfo(NamedTuple):
+    x: np.ndarray  # x-coordinates of the particle
+    y: np.ndarray  # y-coordinates of the particle
+    exit_time: float  # time at which the particle exits the cell
+    hop: np.ndarray  # distances traveled during hopping states
+    driv: np.ndarray  # distances traveled during driven states
+    vd: np.ndarray  # velocities during driven states
+    vh: np.ndarray  # velocities during hopping states
+
 def move(
-    tTot,
+    total_time,
     pDriv=0.03,
-    trap_size=TRAP_SIZE,
+    trap_dist=TRAP_DIST,
     avg=TIME_BETWEEN_STATES,
     theta=0,
     dt=1e-2,
-):
-    '''tTot: maximum total amount of "cell time" this simulation is run
+) -> SimInfo:
+    '''total_time: maximum total amount of "cell time" this simulation is run
     pDriv: probability of driven motion as opposed to trap
-    trap_size: distance between traps (m)
+    trap_dist: distance between traps (m)
     avg: average time between states'''
     k = random.uniform(6e-7, 2.6e-6) # spring constant; N/m
 
@@ -40,63 +54,36 @@ def move(
     xC = x[0]
     yC = y[0]
 
-    trap_radius = trap_size / 2
+    trap_radius = trap_dist / 2
 
     # effective probability, b/c pDriv should be time-based and this program doesn't treat it as such
     if pDriv != 0 and pDriv != 1:
         pDriv *= (avg / (1 - pDriv + avg*pDriv))
 
-    # determine when particle changes states
-    changeTime = np.array([], float)
-    driven = {}
-    sdf = 0.4
-    inc = -1
-    curr = random.random() < pDriv
-    driven[0] = curr
-    while inc < 0:
-        if curr:
-            inc = random.gauss(1, 1)
-        else:
-            inc = random.gauss(avg, avg)
-    tempT = np.round(inc, 2)
-    while tempT < tTot:
-        changeTime = np.append(changeTime, tempT)
-        curr = random.random() < pDriv
-        driven[tempT] = curr
+    def set_state_duration(d):
         inc = -1
         while inc < 0:
-            if curr:
+            if d:
                 inc = random.gauss(1, 1)
             else:
                 inc = random.gauss(avg, avg)
-        tempT = np.round(tempT + inc, 2)
-        driven[np.round(tempT, 2)] = curr
-    curr = driven[0]
-    for t in np.arange(0, tTot+2*dt, dt):
-        if t in changeTime:
-            curr = driven[t]
+        return inc
+
+    # determine when particle changes states
+    changeTime = np.array([], float)
+    driven = {}
+    curr = random.random() < pDriv
+    inc = set_state_duration(curr)
+    driven[0] = curr
+
+    tempT = np.round(inc, 2)
+    for i, t in enumerate(np.arange(0, total_time+2*dt, dt)):
+        if t >= tempT:
+            changeTime = np.append(changeTime, tempT)
+            curr = random.random() < pDriv
+            inc = set_state_duration(curr)
+            tempT = np.round(tempT + inc, 2)
         driven[np.round(t, 2)] = curr
-        
-    # changeTime = np.array([], float)
-    # sdf = 0.4
-    # inc = -1
-    # while inc < 0:
-    #     inc = random.gauss(avg, sdf)
-    # tempT = np.round(inc, 2)
-    # while tempT < tTot:
-    #     changeTime = np.append(changeTime, tempT)
-    #     inc = -1
-    #     while inc < 0:
-    #         inc = random.gauss(avg, sdf)
-    #     tempT = np.round(tempT + inc, 2)
-    # # print(changeTime)
-    # # interstate = []
-    # driven = {}
-    # curr = random.random() < pDriv
-    # for t in np.arange(0, tTot+2*dt, dt):
-    #     driven[np.round(t, 2)] = curr
-    #     if t in changeTime:
-    #         curr = random.random() < pDriv
 
     exitTime = -1
 
@@ -106,13 +93,11 @@ def move(
     vh = np.array([], float)
     prev = 0
 
-    adj = 0 # adjustment in change-state times due to failure to jump previously
-
     rev = False
-    for t in np.arange(dt, tTot+dt, dt):
+    for t in tqdm.tqdm(np.arange(dt, total_time+dt, dt)):
         t = np.round(t, 2)
         if driven[t]: # driven
-            dr = random.gauss(MOTOR_PROTEIN_SPEED/dt, MOTOR_PROTEIN_SPEED/dt)
+            dr = random.gauss(MOTOR_PROTEIN_SPEED*dt, MOTOR_PROTEIN_SPEED*dt)
             m = np.sqrt(x[-1]**2 + y[-1]**2)
             # set direction (honestly probably not necessary every single time)
             # I'm not convinced that m ever reaches 0
@@ -151,13 +136,11 @@ def move(
             y = np.append(y, ytemp)
 
             # change states from trap to something else
-            if np.round(t-adj, 2) in changeTime:
+            if np.round(t, 2) in changeTime:
                 if not driven[np.round(t+dt, 2)]:
                     dr = -1
                     while dr < 0:
-                        # sdf = 1.19
-                        sdf = 1.8
-                        dr = random.gauss(trap_radius, sdf*trap_radius) # idk what the SD should be
+                        dr = random.gauss(TRAP_DIST, TRAP_SD)
                     rand = 2
                     while np.abs(rand) > 1:
                         rand = random.gauss(0, 0.4)
@@ -165,22 +148,19 @@ def move(
                     xC += dr * np.cos(theta)
                     yC += dr * np.sin(theta)
 
-        # if np.round(t - dt - adj, 2) in changeTime:
-        #     interstate.append(np.sqrt( (x[-1] - x[-2])**2 + (y[-1] - y[-2])**2 ))
-
-        # halve any differences (idk if this is a good idea, but it's a quick fix)
-        x[-1] = (x[-1] + x[-2])/2
-        y[-1] = (y[-1] + y[-2])/2
+        # # halve any differences (idk if this is a good idea, but it's a quick fix)
+        # x[-1] = (x[-1] + x[-2])/2
+        # y[-1] = (y[-1] + y[-2])/2
 
         # noise
         x[-1] += random.gauss(0, 2e-9)
         y[-1] += random.gauss(0, 2e-9)
 
         # determine the direction of the next bout of driven motion
-        if np.round(t-adj, 2) in changeTime:
+        if np.round(t, 2) in changeTime:
             rev = random.random()<0.5
 
-        veltmp = np.sqrt( (x[-1] - x[-2])**2 + (y[-1] - y[-2])**2 ) * 100
+        veltmp = np.sqrt( (x[-1] - x[-2])**2 + (y[-1] - y[-2])**2 ) / dt
 
         # store velocity information
         if driven[np.round(t, 2)]:
@@ -189,7 +169,7 @@ def move(
             vh = np.append(vh, veltmp)
 
         # distance traveled over the course of a particular state
-        if np.round(t-adj, 2) in changeTime:
+        if np.round(t, 2) in changeTime:
             tmp = np.sqrt((x[-1] - x[prev])**2 + (y[-1] - y[prev])**2)
             if driven[np.round(t, 2)]:
                 driv = np.append(driv, tmp)
@@ -201,41 +181,57 @@ def move(
             exitTime = t
             break
 
-    # fi.close()
-    # print(interstate)
     return x, y, False, exitTime, hop, driv, vd, vh
 
 
-def graph(tTot):
-    x, y = move(tTot)
-    dt = 0.01
+def graph(
+    total_time,
+    pDriv=0.03,
+    trap_dist=TRAP_DIST,
+    avg=TIME_BETWEEN_STATES,
+    theta=0,
+    dt=1e-2,
+):
+    """Graph the movement of a particle in a cell."""
+    x, y = move(
+        total_time,
+        pDriv=pDriv,
+        trap_dist=trap_dist,
+        avg=avg,
+        theta=theta,
+        dt=dt,
+)
     gx = [i * 1e6 for i in x]
     gy = [i * 1e6 for i in y]
-    for i in range(tTot-1):
+    for i in range(total_time-1):
         plt.scatter(gx[int(i/dt):int((i+1)/dt)], gy[int(i/dt):int((i+1)/dt)])
     centerx = []
     centery = []
-    for i in range(tTot-1):
+    for i in range(total_time-1):
         centerx.append(st.mean(gx[int(i/dt):int((i+1)/dt)]))
         centery.append(st.mean(gy[int(i/dt):int((i+1)/dt)]))
     plt.plot(centerx, centery)
     plt.show()
-    
+
+
 def run_simulation(
-    tTot,
+    total_time,
     n_particles=1,
     write_to_ps=False,
     pDriv=0.03,
-    trap_size=TRAP_SIZE,
+    trap_dist=TRAP_DIST,
     avg=TIME_BETWEEN_STATES,
     dirname="sim",
 ):
-    '''tTot: maximum total amount of "cell time" this simulation is run
-    n: number of particles shown
+    '''
+    total_time: maximum total amount of "cell time" this simulation is run
+    n_particles: number of particles shown
     write_to_ps: if true, write canvas as Postscript files
     pDriv: probability of driven motion as opposed to trap
-    trap_size: size of trap (m)
-    avg: average time between states'''
+    trap_dist: size of trap (m)
+    avg: average time between states
+    dirname: directory to save simulation files
+    '''
     root = tk.Tk()
 
     WIDTH = 600
@@ -273,13 +269,13 @@ def run_simulation(
 
     # get coordinate information
     coords = []
-    dur = 0
+    max_n_steps = 0
     i = 0
     n_exited = 0
     exit_times = []
     while i < n_particles:
-        x, y, throw_out, exit_time, _, _, _, _ = move(tTot, pDriv, trap_size, avg, theta=2*np.pi*i/n_particles)
-        dur = max(len(x), dur)
+        x_coords, y_coords, throw_out, exit_time, _, _, _, _ = move(total_time, pDriv, trap_dist, avg, theta=2*np.pi*i/n_particles)
+        max_n_steps = max(len(x_coords), max_n_steps)
         if throw_out:
             print(f"throw out particle {i}")
             continue
@@ -287,7 +283,7 @@ def run_simulation(
             if exit_time != -1:
                 n_exited += 1
                 exit_times.append(exit_time)
-            coords.append([[xd*sc for xd in x], [yd*sc for yd in y]])
+            coords.append([[xd*sc for xd in x_coords], [yd*sc for yd in y_coords]])
             print(f"particle {i} done")
             i += 1
 
@@ -342,7 +338,7 @@ def run_simulation(
 
     def writeToFile():
         nonlocal coords
-        with open('coords.csv', 'w') as f:
+        with open(os.path.join(dirname, 'coords.csv'), 'w') as f:
             w=csv.writer(f, quoting=csv.QUOTE_NONE)
             for i in range(n_particles):
                 for j in range(len(coords[i][0])):
@@ -361,7 +357,7 @@ def run_simulation(
     time.sleep(1)
     time.sleep(dt)
 
-    while t < dur:
+    while t < max_n_steps:
         if not playBool.get():
             pauseB.wait_variable(playBool)
         for k in range(n_particles):
@@ -372,7 +368,7 @@ def run_simulation(
         canvas.update()
         timeL.config(text='Time: {:7.2f} s'.format(t*0.01))
         if write_to_ps:
-            save_canvas("{}scene-{:03d}.tif".format(dir, t))
+            save_canvas(os.path.join(dirname, f"scene-{t:03d}.tif"))
         else:
             time.sleep(dt)
         t += 1
@@ -384,5 +380,5 @@ def run_simulation(
 
 if __name__ == "__main__":
     run_simulation(
-        tTot=2000,
+        total_time=2000,
     )

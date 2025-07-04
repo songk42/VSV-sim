@@ -1,13 +1,8 @@
 import numpy as np
-import random
+import tqdm
 from matplotlib import pyplot as plt
-from scipy import stats as st
 import os
 import simulation as sim
-# import tkinter as tk
-# import PIL.ImageGrab as ImageGrab
-# import time
-# import csv
 
 def writefile(x, y, i, pDriv):
     if not os.path.exists("coord-test"):
@@ -17,15 +12,23 @@ def writefile(x, y, i, pDriv):
         f.write("{},{}\n".format(x[j], y[j]))
     f.close()
 
-def analyze(tTot, n=1, pDriv=0.03, ts=1.7e-7, avg=0.41):
+def analyze(
+    tTot,
+    n=1,
+    pDriv=0.03,
+    dt=0.01,
+    trap_size=1.7e-7,
+    avg=0.41,
+):
     '''tTot: maximum total amount of "cell time" this simulation is run
     n: number of particles shown
     pDriv: probability of driven motion as opposed to trap
-    ts: size of trap (m)
+    dt: time step (s)
+    trap_size: size of trap (m)
     avg: average time between states'''
     # coords = []
     exitTime = np.array([])
-    dur = 0
+    max_n_steps = 0
     i = 0
     nout = 0
     fhop = np.array([], float)
@@ -34,43 +37,36 @@ def analyze(tTot, n=1, pDriv=0.03, ts=1.7e-7, avg=0.41):
     ddriv = np.array([], float)
     vhop = np.array([], float)
     vdriv = np.array([], float)
-    while i < n:
-        x, y, b, et, hop, driv, vd, vh = sim.move(tTot, pDriv, ts, avg, theta=2*np.pi*i/n)
+    for i in tqdm.tqdm(range(n)):
+        x, y, bad, et, hop, driv, vd, vh = sim.move(tTot, pDriv, trap_size, avg, theta=2*np.pi*i/n)
         writefile(x, y, i, pDriv)
-        # sum(hop) = tot. distance achieved by one particle via hopping
-        dur = max(len(x), dur)
-        fh = sum(hop) * len(hop)/(len(hop)+len(driv)) # flux
-        fd = sum(driv) * len(driv)/(len(hop)+len(driv))
-        # print(len(hop), len(driv))
-        fhop = np.append(fhop, fh/(fd+fh))
-        fdriv = np.append(fdriv, fd/(fd+fh))
+        max_n_steps = max(len(x), max_n_steps)
+        if bad:
+            i -= 1
+            continue
+        fh = sum(hop) * len(hop)/max(1, len(hop)+len(driv)) # flux
+        fd = sum(driv) * len(driv)/max(1, len(hop)+len(driv))
+        fhop = np.append(fhop, fh/max(1, fd+fh))
+        fdriv = np.append(fdriv, fd/max(1, fd+fh))
         dhop = np.append(dhop, sum(hop))
         ddriv = np.append(ddriv, sum(driv))
         for j in vh:
             vhop = np.append(vhop,j)
         for j in vd:
             vdriv = np.append(vdriv,j)
-        if b:
-            i -= 1
-            # print("throw out")
-        else:
-            if et != -1:
-                nout += 1
-                exitTime = np.append(exitTime, et)
-            # coords.append([x, y])
-            # print(i)
-            if i % 50 == 0:
-                print(i)
-        i += 1
+        if et != -1:
+            nout += 1
+            exitTime = np.append(exitTime, et)
 
     # print("---")
 
-    print("{} out of {} exit the cell".format(nout, n))
-    print(np.mean(dhop), np.mean(ddriv)) # mean distance via each method
-    print(np.mean(fhop), np.mean(fdriv)) # mean fraction of flux via each method???
-    print(np.mean(vhop), np.mean(vdriv)) # mean velocity via each method?
+    print(f"{nout} out of {n} exit the cell".format(nout, n))
+    print(f"Mean exit time: {np.mean(exitTime)}")
+    print(f"Mean distance (hop): {np.mean(dhop)}, (driv): {np.mean(ddriv)}")
+    print(f"Mean flux (hop): {np.mean(fhop)}, (driv): {np.mean(fdriv)}")
+    print(f"Mean velocity (hop): {np.mean(vhop)}, (driv): {np.mean(vdriv)}")
     msd = []
-    # for i in range(dur):
+    # for i in range(max_n_steps):
     #     temp = []
     #     for j in range(n):
     #         try:
@@ -78,7 +74,7 @@ def analyze(tTot, n=1, pDriv=0.03, ts=1.7e-7, avg=0.41):
     #         except:
     #             continue
     #     msd.append(np.mean(temp))
-    time_axis = [np.round(i/100, 2) for i in range(dur)]
+    time_axis = dt * np.arange(max_n_steps)
     return time_axis, msd, exitTime
 
 
@@ -91,7 +87,7 @@ def dispVsTime(pDriv):
 
     f = open("coord{}".format(int(100*pDriv)), "w")
 
-    for j in range(n):
+    for _ in range(n):
         b = True
         while b:
             x, y, b, _, _, _, _, out4 = sim.move(t, pDriv)
