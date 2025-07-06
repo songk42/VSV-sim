@@ -27,16 +27,16 @@ MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 @dataclass
 class SimulationConfig:
     """Configuration for simulation parameters"""
-    total_time: int = 2000
+    total_time: int = 2000  # maximum simulation time (s)
     n_particles: int = 1
-    p_driv: float = 0.03
-    trap_dist: float = TRAP_DIST
-    trap_std: float = TRAP_STD
+    p_driv: float = 0.03  # probability of driven motion (0.0-1.0)
+    trap_dist: float = TRAP_DIST  # distance between traps (m)
+    trap_std: float = TRAP_STD  # standard deviation of trap distance (m)
     time_between: float = TIME_BETWEEN_STATES
-    dt: float = 0.001
+    dt: float = 0.001  # time step (s)
     dirname: str = "sim"
-    width: int = 600
-    height: int = 600
+    width: int = 600  # canvas width in pixels
+    height: int = 600  # canvas height in pixels
     record_frames: bool = False
     end_early: bool = True  # whether to end the simulation early if the particle exits the cell
 
@@ -72,10 +72,17 @@ def move(
     theta: float = 0,
     show_progress: bool = True,
 ) -> SimulationOutput:
-    '''total_time: maximum total amount of "cell time" this simulation is run
-    p_driv: probability of driven motion as opposed to trap
-    trap_dist: distance between traps (m)
-    time_between: average time between states'''
+    '''
+    Simulate the movement of a particle in a cell.
+    Parameters:
+        config: SimulationConfig object containing simulation parameters.
+        theta: Initial angle of the particle in radians (default is 0).
+        show_progress: Whether to show a progress bar (default is True).
+    Returns:
+        SimulationOutput: Contains the x and y coordinates of the particle,
+        the time at which the particle exits the cell, distances traveled during
+        hopping and driven states, and velocities during those states.
+    '''
     k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
 
     x = [CELL_RADIUS/2 * np.cos(theta)]
