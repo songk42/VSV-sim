@@ -223,7 +223,7 @@ def main():
     # Run GUI application
     app = QApplication(sys.argv)
     
-    simulation = vis.Simulation(config)
+    simulation = vis.SimulationVis(config)
     simulation.show()
     simulation.run_simulation()
     

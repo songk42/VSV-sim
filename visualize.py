@@ -236,7 +236,7 @@ class SimulationCanvas(QWidget):
                 )
 
 
-class Simulation(QMainWindow):
+class SimulationVis(QMainWindow):
     """Main simulation visualization window"""
 
     # UI Constants
