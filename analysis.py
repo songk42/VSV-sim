@@ -1,7 +1,9 @@
+from typing import NamedTuple
+
 import numpy as np
-from matplotlib import pyplot as plt
 import os
 import simulation as sim
+import tqdm
 
 def writefile(x, y, i, pDriv):
     if not os.path.exists("coord-test"):
@@ -11,15 +13,20 @@ def writefile(x, y, i, pDriv):
         f.write("{},{}\n".format(x[j], y[j]))
     f.close()
 
-def analyze(
-    tTot,
-    n=1,
-    pDriv=0.03,
-    trap_size=sim.TRAP_SIZE,
-    trap_std=sim.TRAP_STD,
-    avg=0.41,
-    dt=0.001,
-):
+
+class AnalysisOutput(NamedTuple):
+    msd: np.ndarray  # Mean squared displacement
+    exit_times: np.ndarray  # Times at which particles exited the cell
+    max_n_steps: int  # Maximum number of steps taken by any particle
+    flux_trap: np.ndarray  # Flux for hopping motion
+    flux_driven: np.ndarray  # Flux for driven motion
+    distance_trap: np.ndarray  # Distance traveled during hopping
+    distance_driven: np.ndarray  # Distance traveled during driven motion
+    velocity_trap: np.ndarray  # Velocity during hopping
+    velocity_driven: np.ndarray  # Velocity during driven motion
+
+
+def analyze(config: sim.SimulationConfig):
     '''tTot: maximum total amount of "cell time" this simulation is run
     n: number of particles shown
     pDriv: probability of driven motion as opposed to trap
@@ -27,84 +34,84 @@ def analyze(
     avg: average time between states
     dt: time step (s)
     '''
-    # coords = []
-    exitTime = np.array([])
+    exit_times = np.array([])
     max_n_steps = 0
     i = 0
     nout = 0
-    fhop = np.array([], float)
-    fdriv = np.array([], float)
-    dhop = np.array([], float)
-    ddriv = np.array([], float)
-    vhop = np.array([], float)
-    vdriv = np.array([], float)
-    for i in range(n):
-        x, y, et, hop, driv, vd, vh = sim.move(tTot, pDriv, trap_size, trap_std, avg, 2*np.pi*i/n, dt)
-        writefile(x, y, i, pDriv)
-        max_n_steps = max(len(x), max_n_steps)
-        fh = sum(hop) * len(hop)/max(1, len(hop)+len(driv)) # flux
-        fd = sum(driv) * len(driv)/max(1, len(hop)+len(driv))
-        fhop = np.append(fhop, fh/max(1, fd+fh))
-        fdriv = np.append(fdriv, fd/max(1, fd+fh))
-        dhop = np.append(dhop, sum(hop))
-        ddriv = np.append(ddriv, sum(driv))
-        for j in vh:
-            vhop = np.append(vhop,j)
-        for j in vd:
-            vdriv = np.append(vdriv,j)
-        if et != -1:
+    flux_trap = np.array([], float)
+    flux_driven = np.array([], float)
+    distance_trap = np.array([], float)
+    distance_driven = np.array([], float)
+    velocity_trap = np.array([], float)
+    velocity_driven = np.array([], float)
+
+    for i in tqdm.tqdm(range(config.n_particles)):
+        sim_output = sim.move(config, 2*np.pi*i/config.n_particles, show_progress=False)
+        max_n_steps = max(len(sim_output.x), max_n_steps)
+
+        fh = sum(sim_output.distance_trap) * len(sim_output.distance_trap)/max(1, len(sim_output.distance_trap)+len(sim_output.distance_driven)) # flux
+        fd = sum(sim_output.distance_driven) * len(sim_output.distance_driven)/max(1, len(sim_output.distance_trap)+len(sim_output.distance_driven))
+        flux_trap = np.append(flux_trap, fh/max(1, fd+fh))
+        flux_driven = np.append(flux_driven, fd/max(1, fd+fh))
+
+        distance_trap = np.append(distance_trap, sum(sim_output.velocity_trap))
+        distance_driven = np.append(distance_driven, sum(sim_output.velocity_driven))
+        for j in sim_output.velocity_trap:
+            velocity_trap = np.append(velocity_trap,j)
+        for j in sim_output.velocity_driven:
+            velocity_driven = np.append(velocity_driven,j)
+
+        if sim_output.exit_time != -1:
             nout += 1
-            exitTime = np.append(exitTime, et)
+            exit_times = np.append(exit_times, sim_output.exit_time)
 
-    # print("---")
+    print(f"{nout} out of {config.n_particles} exit the cell".format(nout, config.n_particles))
+    print(f"Mean exit time: {np.mean(exit_times)}")
+    print(f"Mean distance (hop): {np.mean(distance_trap)}, (driv): {np.mean(distance_driven)}")
+    print(f"Mean flux (hop): {np.mean(flux_trap)}, (driv): {np.mean(flux_driven)}")
+    print(f"Mean velocity (hop): {np.mean(velocity_trap)}, (driv): {np.mean(velocity_driven)}")
 
-    print(f"{nout} out of {n} exit the cell".format(nout, n))
-    print(f"Mean exit time: {np.mean(exitTime)}")
-    print(f"Mean distance (hop): {np.mean(dhop)}, (driv): {np.mean(ddriv)}")
-    print(f"Mean flux (hop): {np.mean(fhop)}, (driv): {np.mean(fdriv)}")
-    print(f"Mean velocity (hop): {np.mean(vhop)}, (driv): {np.mean(vdriv)}")
-    msd = []
-    # for i in range(max_n_steps):
-    #     temp = []
-    #     for j in range(n):
-    #         try:
-    #             temp.append(coords[j][0][i]**2 + coords[j][1][i]**2)
-    #         except:
-    #             continue
-    #     msd.append(np.mean(temp))
-    time_axis = dt * np.arange(max_n_steps)
-    return time_axis, msd, exitTime
+    return AnalysisOutput(
+        exit_times=exit_times,
+        max_n_steps=max_n_steps,
+        flux_trap=flux_trap,
+        flux_driven=flux_driven,
+        distance_trap=distance_trap,
+        distance_driven=distance_driven,
+        velocity_trap=velocity_trap,
+        velocity_driven=velocity_driven,
+    )
 
 
-def dispVsTime(pDriv):
-    t = 1000
-    gx=list(range(t))
-    gy=[7.5]
-    n=100
-    tmp = [[] for i in range(t-1)]
+def displacement_vs_time(
+    total_time,
+    n_particles,
+    pDriv,
+):
+    x_all = []
+    y_all = []
+    config = sim.SimulationConfig(
+        n_particles=n_particles,
+        total_time=total_time,
+        p_driv=pDriv,
+        end_early=False,
+    )
 
-    f = open("coord{}".format(int(100*pDriv)), "w")
+    for _ in tqdm.tqdm(range(n_particles)):
+        sim_output = sim.move(config, show_progress=False)
+        x = np.concatenate([np.array([7.5]), sim_output.x * 1e6])  # Convert to micrometers
+        y = np.concatenate([np.array([0]), sim_output.y * 1e6])
+        x_all.append(x)
+        y_all.append(y)
 
-    for _ in range(n):
-        b = True
-        while b:
-            x, y, b, _, _, _, _, out4 = sim.move(t, pDriv)
-        print(len(x))
-        for i in range(len(x)):
-            f.write("{} {}\n".format(x[i], y[i]))
-        f.write("---\n")
-        for i in range(t-1):
-            tmp[i].append((x[100*(i+1)-1]**2 + y[100*(i+1)-1]**2) ** 0.5)
+    x_all = np.array(x_all)
+    y_all = np.array(y_all)
+    displacements = np.sqrt(x_all**2 + y_all**2)
+    displacements -= 7.5 # Center the displacement around 0
+    mean_dist = np.mean(displacements, axis=0)
 
-    f.close()
+    displacements = np.abs(displacements)
+    mean_disp = np.mean(displacements, axis=0)
+    mean_squared_disp = np.mean(displacements**2, axis=0)
 
-    for l in tmp:
-        gy.append(np.mean(l) * 1e6)
-
-    gy = [k - 7.5 for k in gy]
-    print(gy)
-    plt.ylim(0, 8)
-    plt.xlabel("Time (s)")
-    plt.ylabel("Dist traveled (um)")
-    plt.scatter(gx, gy)
-    plt.show()
+    return mean_dist, mean_disp, mean_squared_disp
