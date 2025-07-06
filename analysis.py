@@ -1,5 +1,4 @@
 import numpy as np
-import tqdm
 from matplotlib import pyplot as plt
 import os
 import simulation as sim
@@ -16,16 +15,18 @@ def analyze(
     tTot,
     n=1,
     pDriv=0.03,
-    dt=0.01,
-    trap_size=1.7e-7,
+    trap_size=sim.TRAP_SIZE,
+    trap_std=sim.TRAP_STD,
     avg=0.41,
+    dt=0.001,
 ):
     '''tTot: maximum total amount of "cell time" this simulation is run
     n: number of particles shown
     pDriv: probability of driven motion as opposed to trap
-    dt: time step (s)
     trap_size: size of trap (m)
-    avg: average time between states'''
+    avg: average time between states
+    dt: time step (s)
+    '''
     # coords = []
     exitTime = np.array([])
     max_n_steps = 0
@@ -37,13 +38,10 @@ def analyze(
     ddriv = np.array([], float)
     vhop = np.array([], float)
     vdriv = np.array([], float)
-    for i in tqdm.tqdm(range(n)):
-        x, y, bad, et, hop, driv, vd, vh = sim.move(tTot, pDriv, trap_size, avg, theta=2*np.pi*i/n)
+    for i in range(n):
+        x, y, et, hop, driv, vd, vh = sim.move(tTot, pDriv, trap_size, trap_std, avg, 2*np.pi*i/n, dt)
         writefile(x, y, i, pDriv)
         max_n_steps = max(len(x), max_n_steps)
-        if bad:
-            i -= 1
-            continue
         fh = sum(hop) * len(hop)/max(1, len(hop)+len(driv)) # flux
         fd = sum(driv) * len(driv)/max(1, len(hop)+len(driv))
         fhop = np.append(fhop, fh/max(1, fd+fh))

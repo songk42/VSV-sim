@@ -28,7 +28,7 @@ def parse_arguments() -> argparse.Namespace:
         help='Number of particles to simulate'
     )
     sim_group.add_argument(
-        '--pDriv', type=float, default=0.03,
+        '--p_driv', type=float, default=0.03,
         help='Probability of driven motion (0.0-1.0)'
     )
     sim_group.add_argument(
@@ -36,11 +36,15 @@ def parse_arguments() -> argparse.Namespace:
         help=f'Distance between traps (meters) (default: {sim.TRAP_DIST})'
     )
     sim_group.add_argument(
+        '--trap_std', type=float, default=sim.TRAP_STD,
+        help=f'Standard deviation of trap distance (meters) (default: {sim.TRAP_STD})'
+    )
+    sim_group.add_argument(
         '--time_between', type=float, default=sim.TIME_BETWEEN_STATES,
         help=f'Average time between state changes (seconds) (default: {sim.TIME_BETWEEN_STATES})'
     )
     sim_group.add_argument(
-        '--dt', type=float, default=0.01,
+        '--dt', type=float, default=0.001,
         help='Length of time step for simulation (seconds)'
     )
     
@@ -78,7 +82,7 @@ def parse_arguments() -> argparse.Namespace:
 Examples:
   %(prog)s                                    # Run with default settings
   %(prog)s --n_particles 5 --total_time 5000 # Simulate 5 particles for 5000 steps
-  %(prog)s --pDriv 0.1 --dirname results     # Higher drive probability, custom output
+  %(prog)s --p_driv 0.1 --dirname results     # Higher drive probability, custom output
   %(prog)s --width 800 --height 800          # Larger display window
   %(prog)s --headless --dirname run          # Run without GUI
     """
@@ -95,8 +99,8 @@ def validate_arguments(args: argparse.Namespace) -> bool:
         errors.append("total_time must be positive")
     if args.n_particles <= 0:
         errors.append("n_particles must be positive")
-    if not 0.0 <= args.pDriv <= 1.0:
-        errors.append("pDriv must be between 0.0 and 1.0")
+    if not 0.0 <= args.p_driv <= 1.0:
+        errors.append("p_driv must be between 0.0 and 1.0")
     if args.dt <= 0:
         errors.append("dt must be positive")
     if args.width <= 0 or args.height <= 0:
@@ -137,10 +141,12 @@ def run_headless_simulation(config: sim.SimulationConfig) -> bool:
             
             x_coords, y_coords, throw_out, exit_time, _, _, _, _ = sim.move(
                 config.total_time,
-                config.pDriv,
+                config.p_driv,
                 config.trap_dist,
+                config.trap_std,
                 config.time_between,
-                theta=2*np.pi*i/config.n_particles
+                2*np.pi*i/config.n_particles,
+                config.dt,
             )
             
             max_n_steps = max(len(x_coords), max_n_steps)
@@ -166,30 +172,17 @@ def run_headless_simulation(config: sim.SimulationConfig) -> bool:
                     writer.writerow([j, i, coord[0][j], coord[1][j]])
         
         # Write summary
-        summary_filename = os.path.join(config.dirname, 'summary.txt')
-        with open(summary_filename, 'w') as f:
-            f.write(f"Simulation Summary\n")
-            f.write(f"==================\n\n")
-            f.write(f"Parameters:\n")
-            f.write(f"  Total time: {config.total_time} s\n")
-            f.write(f"  Number of particles: {config.n_particles}\n")
-            f.write(f"  Probability of driven motion: {config.pDriv}\n")
-            f.write(f"  Trap distance: {config.trap_dist:.2e} m\n")
-            f.write(f"  Time between states: {config.time_between} s\n")
-            f.write(f"  Time step: {config.dt} s\n\n")
-            f.write(f"Results:\n")
-            f.write(f"  Particles completed: {len(coords)}\n")
-            f.write(f"  Particles exited: {n_exited}\n")
-            f.write(f"  Maximum steps: {max_n_steps}\n")
-            if exit_times:
-                f.write(f"  Average exit time: {np.mean(exit_times):.2e} s\n")
-        
         print(f"\nSimulation complete!")
+        print(f"==================\n\n")
+        print(f"Results:\n")
+        print(f"  Particles completed: {len(coords)}\n")
+        print(f"  Particles exited: {n_exited}\n")
+        print(f"  Maximum steps: {max_n_steps}\n")
+        if exit_times:
+            print(f"  Average exit time: {np.mean(exit_times):.2e} s\n")
+        
         print(f"Results saved to: {config.dirname}/")
         print(f"  - {csv_filename}")
-        print(f"  - {summary_filename}")
-        print(f"Particles completed: {len(coords)}/{config.n_particles}")
-        print(f"Particles exited: {n_exited}")
         
         return True
         
@@ -214,7 +207,7 @@ def main():
     print(f"Configuration:")
     print(f"  Number of particles: {config.n_particles}")
     print(f"  Total time: {config.total_time} s")
-    print(f"  Probability of driven motion: {config.pDriv}")
+    print(f"  Probability of driven motion: {config.p_driv}")
     print(f"  Output directory: {config.dirname}")
     if args.headless:
         print(f"  Mode: Headless (no GUI)")

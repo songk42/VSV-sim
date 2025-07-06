@@ -46,10 +46,12 @@ class SimulationWorker(QThread):
                 try:
                     x_coords, y_coords, throw_out, exit_time, _, _, _, _ = sim.move(
                         self.config.total_time,
-                        self.config.pDriv,
+                        self.config.p_driv,
                         self.config.trap_dist,
+                        self.config.trap_std,
                         self.config.time_between,
-                        theta=2*np.pi*i/self.config.n_particles
+                        2*np.pi*i/self.config.n_particles,
+                        self.config.dt,
                     )
                 except Exception as e:
                     self.error_occurred.emit(f"Error simulating particle {i}: {str(e)}")
