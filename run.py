@@ -139,26 +139,15 @@ def run_headless_simulation(config: sim.SimulationConfig) -> bool:
         for i in range(config.n_particles):
             print(f"Simulating particle {i+1}/{config.n_particles}...")
             
-            x_coords, y_coords, throw_out, exit_time, _, _, _, _ = sim.move(
-                config.total_time,
-                config.p_driv,
-                config.trap_dist,
-                config.trap_std,
-                config.time_between,
+            x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
+                config,
                 2*np.pi*i/config.n_particles,
-                config.dt,
             )
-            
+
             max_n_steps = max(len(x_coords), max_n_steps)
-            
-            if throw_out:
-                print(f"  Particle {i+1} discarded (entered nucleus)")
-                continue
-            
             if exit_time != -1:
                 n_exited += 1
                 exit_times.append(exit_time)
-            
             coords.append([x_coords, y_coords])
         
         # Export results
