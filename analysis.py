@@ -5,10 +5,10 @@ import os
 import simulation as sim
 import tqdm
 
-def writefile(x, y, i, pDriv):
+def writefile(x, y, i, p_driv):
     if not os.path.exists("coord-test"):
         os.makedirs("coord-test")
-    f = open("coord-test/coords-{}-{}".format(pDriv, i), 'w')
+    f = open("coord-test/coords-{}-{}".format(p_driv, i), 'w')
     for j in range(len(x)):
         f.write("{},{}\n".format(x[j], y[j]))
     f.close()
@@ -29,7 +29,7 @@ class AnalysisOutput(NamedTuple):
 def analyze(config: sim.SimulationConfig):
     '''tTot: maximum total amount of "cell time" this simulation is run
     n: number of particles shown
-    pDriv: probability of driven motion as opposed to trap
+    p_driv: probability of driven motion as opposed to trap
     trap_size: size of trap (m)
     avg: average time between states
     dt: time step (s)
@@ -86,14 +86,14 @@ def analyze(config: sim.SimulationConfig):
 def displacement_vs_time(
     total_time,
     n_particles,
-    pDriv,
+    p_driv,
 ):
     x_all = []
     y_all = []
     config = sim.SimulationConfig(
         n_particles=n_particles,
         total_time=total_time,
-        p_driv=pDriv,
+        p_driv=p_driv,
         end_early=False,
     )
 

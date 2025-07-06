@@ -88,24 +88,24 @@ def move(
     #     p_driv *= (time_between / (1 - p_driv + time_between*p_driv))
 
     def set_state_duration(d):
-        inc = -1
-        while inc < 0:
-            inc = random.gauss(config.time_between, config.time_between)
-        return inc
+        state_length = -1
+        while state_length < 0:
+            state_length = random.gauss(config.time_between, config.time_between)
+        return state_length
 
     # determine when particle changes states
     state_switch_times = []
     curr = random.random() < config.p_driv
-    inc = set_state_duration(curr)
+    state_length = set_state_duration(curr)
     driven = [curr]
 
-    tempT = inc
+    state_end_time = state_length
     for i, t in enumerate(np.arange(0, config.total_time+2*config.dt, config.dt)):
-        if t >= tempT:
-            state_switch_times.append(i)  # TODO change to (i, is_driven) and get rid of `driven`
+        if t >= state_end_time:
+            state_switch_times.append(i)
             curr = random.random() < config.p_driv
-            inc = set_state_duration(curr)
-            tempT = tempT + inc
+            state_length = set_state_duration(curr)
+            state_end_time = state_end_time + state_length
         driven.append(curr)
 
     distance_trap = []
@@ -122,7 +122,7 @@ def move(
         frame_iterable = tqdm.tqdm(
             frame_iterable,
             total=config.total_time,
-            unit="s",
+            unit=" virtual s",
             unit_scale=config.dt,
             desc="Time elapsed in simulation"
         )
@@ -141,10 +141,10 @@ def move(
                     theta += np.pi
                 if reverse_direction:
                     theta += np.pi
-                x_new = x[-1] - dr * np.cos(theta)
-                y_new = y[-1] - dr * np.sin(theta)
-            x.append(x_new + random.gauss(0, 2e-9))
-            y.append(y_new + random.gauss(0, 2e-9))
+                x_new = x[-1] + dr * np.cos(theta) + random.gauss(0, 2e-9)
+                y_new = y[-1] + dr * np.sin(theta) + random.gauss(0, 2e-9)
+            x.append(x_new)
+            y.append(y_new)
             x_center = x[-1]
             y_center = y[-1]
 
@@ -157,11 +157,11 @@ def move(
             while np.sqrt(x_new**2 + y_new**2) < NUCLEUS_RADIUS:
                 dx = -k*(x[-1]-x_center)*config.dt/g + np.sqrt(2*D*config.dt) * random.gauss(0, 1)
                 dy = -k*(y[-1]-y_center)*config.dt/g + np.sqrt(2*D*config.dt) * random.gauss(0, 1)
-                x_new = x[-1] + dx
-                y_new = y[-1] + dy
+                x_new = x[-1] + dx + random.gauss(0, 2e-9)
+                y_new = y[-1] + dy + random.gauss(0, 2e-9)
 
-            x.append(x_new + random.gauss(0, 2e-9))
-            y.append(y_new + random.gauss(0, 2e-9))
+            x.append(x_new)
+            y.append(y_new)
 
             # change states from trap to something else
             if i in state_switch_times:
@@ -195,11 +195,11 @@ def move(
 
         # distance traveled over the course of a particular state
         if i in state_switch_times:
-            tmp = np.sqrt((x[-1] - x[start_of_state])**2 + (y[-1] - y[start_of_state])**2)
+            dist = np.sqrt((x[-1] - x[start_of_state])**2 + (y[-1] - y[start_of_state])**2)
             if driven[i]:
-                distance_driven.append(tmp)
+                distance_driven.append(dist)
             else:
-                distance_trap.append(tmp)
+                distance_trap.append(dist)
             start_of_state = i+1
         
         if np.sqrt(x[-1]**2+y[-1]**2) > CELL_RADIUS and exit_time == -1:
