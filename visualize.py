@@ -44,12 +44,8 @@ class SimulationWorker(QThread):
                 self.progress_update.emit(i, self.config.n_particles)
 
                 try:
-                    x_coords, y_coords, throw_out, exit_time, _, _, _, _ = sim.move(
-                        self.config.total_time,
-                        self.config.p_driv,
-                        self.config.trap_dist,
-                        self.config.trap_std,
-                        self.config.time_between,
+                    x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
+                        self.config,
                         2*np.pi*i/self.config.n_particles,
                         self.config.dt,
                     )
@@ -58,16 +54,12 @@ class SimulationWorker(QThread):
                     return
 
                 max_n_steps = max(len(x_coords), max_n_steps)
-                if throw_out:
-                    print(f"Discarded particle {i} (entered nucleus)")
-                    continue
-                else:
-                    if exit_time != -1:
-                        n_exited += 1
-                        exit_times.append(exit_time)
-                    coords.append([x_coords, y_coords])
-                    print(f"Particle {i} completed successfully")
-                    i += 1
+                if exit_time != -1:
+                    n_exited += 1
+                    exit_times.append(exit_time)
+                coords.append([x_coords, y_coords])
+                print(f"Particle {i} completed successfully")
+                i += 1
 
             # Final progress update
             self.progress_update.emit(self.config.n_particles, self.config.n_particles)
