@@ -7,6 +7,9 @@ import random
 from matplotlib import pyplot as plt
 import statistics as st
 import tqdm
+from numba import njit
+
+from point import Point
 
 eta = 0.006 # Pa-s
 R = 8.6e-8 # radius of particle (m)
@@ -23,13 +26,12 @@ TRAP_STD = 2.1e-7  # standard deviation of trap distance (m)
 TIME_BETWEEN_STATES = 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
-
 @dataclass
 class SimulationConfig:
     """Configuration for simulation parameters"""
     total_time: int = 2000  # maximum simulation time (s)
     n_particles: int = 1
-    p_driv: float = 0.03  # probability of driven motion (0.0-1.0)
+    p_driv: float = 1  # probability of driven motion (0.0-1.0) should be 0.03
     trap_dist: float = TRAP_DIST  # distance between traps (m)
     trap_std: float = TRAP_STD  # standard deviation of trap distance (m)
     time_between: float = TIME_BETWEEN_STATES
@@ -68,9 +70,9 @@ class SimulationOutput(NamedTuple):
 
 
 def move(
-    config: SimulationConfig,
-    theta: float = 0,
-    show_progress: bool = True,
+        config: SimulationConfig,
+        theta: float = 0,
+        show_progress: bool = True,
 ) -> SimulationOutput:
     '''
     Simulate the movement of a particle in a cell.
@@ -83,12 +85,83 @@ def move(
         the time at which the particle exits the cell, distances traveled during
         hopping and driven states, and velocities during those states.
     '''
+
+    def calc_directed_step(current_x, current_y, reverse_direction):
+        dr = random.gauss(MOTOR_PROTEIN_SPEED*config.dt, MOTOR_PROTEIN_SPEED*config.dt)
+        theta = np.arctan(current_y/current_x)
+        if current_x < 0:
+            theta += np.pi
+        if reverse_direction:
+            theta += np.pi
+        next_x = current_x + dr * np.cos(theta) + random.gauss(0, 2e-9)
+        next_y = current_y + dr * np.sin(theta) + random.gauss(0, 2e-9)
+
+        if outside_nucleus(next_x, next_y):
+            return Point(next_x, next_y)
+        else: # Recursively calculate directed steps until one is outside nucleus
+            return calc_directed_step(current_x, current_y, reverse_direction)
+
+
+    def calc_diffusive_step(current_x, current_y, trap_x_center, trap_y_center):
+        # 1. Restoring‐force (drift) displacement
+        displacement_from_center_x = current_x - trap_x_center
+        displacement_from_center_y = current_y - trap_y_center
+
+        trap_force_x = -k * displacement_from_center_x
+        trap_force_y = -k * displacement_from_center_y
+
+        drift_disp_x = (trap_force_x / g) * config.dt
+        drift_disp_y = (trap_force_y / g) * config.dt
+
+        # 2. Thermal‐diffusion displacement
+        diffusion_std = np.sqrt(2 * D * config.dt)
+
+        while True:
+            diffusion_disp_x = diffusion_std * random.gauss(0, 1)
+            diffusion_disp_y = diffusion_std * random.gauss(0, 1)
+
+            # 3. Fine‐scale jitter
+            jitter_std = 2e-9  # meters
+
+            jitter_disp_x = random.gauss(0, jitter_std)
+            jitter_disp_y = random.gauss(0, jitter_std)
+
+            # 4. Sum all contributions into the total step
+            dx = drift_disp_x + diffusion_disp_x + jitter_disp_x
+            dy = drift_disp_y + diffusion_disp_y + jitter_disp_y
+
+            # 5. Compute the candidate next position
+            next_x = current_x + dx
+            next_y = current_y + dy
+
+            if outside_nucleus(next_x, next_y):
+                return Point(next_x, next_y)
+
+
+    def calc_new_trap_position(trap_x, trap_y):
+        while True:
+            # 1. calculate random direction and distance
+            r = truncated_gauss(config.trap_dist, config.trap_std, low=0)
+            theta = truncated_gauss(0,0.8 * np.pi,low=-2 * np.pi,high=2 * np.pi)
+
+            # 2. propose new center coordinates
+            new_trap_x = trap_x + r * np.cos(theta)
+            new_trap_y = trap_y + r * np.sin(theta)
+
+            # 3. only accept if it's outside the nucleus
+            if outside_nucleus(new_trap_x, new_trap_y):
+                return Point(new_trap_x, new_trap_y)
+
+
     k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
 
-    x = [CELL_RADIUS/2 * np.cos(theta)]
-    y = [CELL_RADIUS/2 * np.sin(theta)]
-    x_center = x[0]
-    y_center = y[0]
+    n_steps = int(config.total_time/config.dt) + 1
+
+    x_history = np.empty(n_steps, dtype=np.float64)
+    y_history = np.empty(n_steps, dtype=np.float64)
+
+    next_x = trap_x_center = x_history[0] = CELL_RADIUS/2 * np.cos(theta)
+    next_y = trap_y_center = y_history[0] = CELL_RADIUS/2 * np.sin(theta)
 
     # effective probability, b/c p_driv should be time-based and this program doesn't treat it as such
     # if p_driv != 0 and p_driv != 1:
@@ -124,6 +197,10 @@ def move(
     start_of_state = 0
     reverse_direction = False
 
+    def outside_nucleus(x, y):
+        return x**2 + y**2 > NUCLEUS_RADIUS**2
+
+
     frame_iterable = enumerate(np.arange(config.dt, config.total_time+config.dt, config.dt))
     if show_progress:
         frame_iterable = tqdm.tqdm(
@@ -135,64 +212,43 @@ def move(
         )
 
     for i, t in frame_iterable:
-        if driven[i]: # driven
-            # set tentative coordinates
-            x_new = 0
-            y_new = 0
+        # Update current_x, current_y
+        current_x = next_x
+        current_y = next_y
 
-            # need to make sure particle doesn't go into nucleus
-            while np.sqrt(x_new**2 + y_new**2) < NUCLEUS_RADIUS:
-                dr = random.gauss(MOTOR_PROTEIN_SPEED*config.dt, MOTOR_PROTEIN_SPEED*config.dt)
-                theta = np.arctan(y[-1]/x[-1])
-                if x[-1] < 0:
-                    theta += np.pi
-                if reverse_direction:
-                    theta += np.pi
-                x_new = x[-1] + dr * np.cos(theta) + random.gauss(0, 2e-9)
-                y_new = y[-1] + dr * np.sin(theta) + random.gauss(0, 2e-9)
-            x.append(x_new)
-            y.append(y_new)
-            x_center = x[-1]
-            y_center = y[-1]
+        # Calc next position
+        if driven[i]:
+            next_pos = calc_directed_step(current_x,current_y,reverse_direction=reverse_direction)
+        else:
+            next_pos = calc_diffusive_step(current_x,current_y,trap_x_center=trap_x_center, trap_y_center=trap_y_center)
+        next_x = next_pos.x
+        next_y = next_pos.y
 
-        else: # trap
-            # tentative coordinates
-            x_new = 0
-            y_new = 0
-            
-            # particle must not enter the nucleus
-            while np.sqrt(x_new**2 + y_new**2) < NUCLEUS_RADIUS:
-                dx = -k*(x[-1]-x_center)*config.dt/g + np.sqrt(2*D*config.dt) * random.gauss(0, 1)
-                dy = -k*(y[-1]-y_center)*config.dt/g + np.sqrt(2*D*config.dt) * random.gauss(0, 1)
-                x_new = x[-1] + dx + random.gauss(0, 2e-9)
-                y_new = y[-1] + dy + random.gauss(0, 2e-9)
+        # Record particle position
+        x_history[i+1] = next_x
+        y_history[i+1] = next_y
 
-            x.append(x_new)
-            y.append(y_new)
+        # Update trap center
+        # If driven, have trap follow particle
+        if driven[i]:
+            trap_x_center = next_x
+            trap_y_center = next_y
 
-            # change states from trap to something else
-            if i in state_switch_times:
-                if not driven[i+1]:
-                    dx = -x_center
-                    dy = -y_center
-                    while np.sqrt((x_center + dx)**2 + (y_center + dy)**2) < NUCLEUS_RADIUS:
-                        new_center_dist = random.gauss(config.trap_dist, config.trap_std)
-                        while new_center_dist < 0:
-                            new_center_dist = random.gauss(config.trap_dist, config.trap_std)
-                        rand = random.gauss(0, 0.4)
-                        while np.abs(rand) > 1:
-                            rand = random.gauss(0, 0.4)
-                        theta = rand*2*np.pi
-                        dx = new_center_dist * np.cos(theta)
-                        dy = new_center_dist * np.sin(theta)
-                    x_center += dx
-                    y_center += dy
+        # If in active diffusion, only move trap if particle just escaped its trap
+        # We say particles escape their trap when a state_switch_time occurs and both the original and new state are active diffusion
+        state_just_switched = i in state_switch_times
+        next_state_will_be_trap_state = not driven[i+1]
+        particle_just_escaped_trap = not driven[i] and state_just_switched and next_state_will_be_trap_state
+        if particle_just_escaped_trap:
+            new_trap_center = calc_new_trap_position(trap_x_center, trap_y_center)
+            trap_x_center = new_trap_center.x
+            trap_y_center = new_trap_center.y
 
         # determine the direction of the next bout of driven motion
-        if i in state_switch_times:
+        if state_just_switched:
             reverse_direction = random.random()<0.5
 
-        v_current = np.sqrt( (x[-1] - x[-2])**2 + (y[-1] - y[-2])**2 ) / config.dt
+        v_current = np.sqrt( (next_x - current_x)**2 + (next_y - current_y)**2 ) / config.dt
 
         # store velocity information
         if driven[i]:
@@ -202,20 +258,23 @@ def move(
 
         # distance traveled over the course of a particular state
         if i in state_switch_times:
-            dist = np.sqrt((x[-1] - x[start_of_state])**2 + (y[-1] - y[start_of_state])**2)
+            dist = np.sqrt((next_x - x_history[start_of_state])**2 + (next_y - y_history[start_of_state])**2)
             if driven[i]:
                 distance_driven.append(dist)
             else:
                 distance_trap.append(dist)
             start_of_state = i+1
-        
-        if np.sqrt(x[-1]**2+y[-1]**2) > CELL_RADIUS and exit_time == -1:
+
+        # Exit if particle escape cell
+        if np.sqrt(next_x**2+next_y**2) > CELL_RADIUS:
             exit_time = t
             if config.end_early: break
 
+
+
     return SimulationOutput(
-        x=np.asarray(x),
-        y=np.asarray(y),
+        x=np.asarray(x_history),
+        y=np.asarray(y_history),
         exit_time=exit_time,
         distance_trap=np.asarray(distance_trap),
         distance_driven=np.asarray(distance_driven),
@@ -225,8 +284,8 @@ def move(
 
 
 def graph(
-    config: SimulationConfig,
-    theta: float = 0,
+        config: SimulationConfig,
+        theta: float = 0,
 ):
     """Graph the movement of a particle in a cell."""
     sim_output = move(config, theta)
@@ -244,3 +303,11 @@ def graph(
         centery.append(st.mean(gy[int(i/config.dt):int((i+1)/config.dt)]))
     plt.plot(centerx, centery)
     plt.show()
+
+@njit
+def truncated_gauss(mu, sigma, low=None, high=None):
+    """Return a Gaussian(μ,σ) sample allowing truncating >= low and/or <= high."""
+    while True:
+        x = random.gauss(mu, sigma)
+        if (low is None or x >= low) and (high is None or x <= high):
+            return x
