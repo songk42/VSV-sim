@@ -5,6 +5,7 @@ import csv
 import numpy as np
 import os
 from PySide6.QtWidgets import QApplication
+from tqdm import tqdm
 
 import simulation as sim
 import visualize as vis
@@ -122,59 +123,52 @@ def validate_arguments(args: argparse.Namespace) -> bool:
     return True
 
 def run_headless_simulation(config: sim.SimulationConfig) -> bool:
-    """Run simulation without GUI and export data"""
-    print(f"Running headless simulation with {config.n_particles} particles...")
+    """Run the simulation without a GUI and export results to CSV."""
+    print(f"Running headless simulation with {config.n_particles} particles…")
     print(f"Output directory: {config.dirname}")
-    
+
     try:
-        # Ensure output directory exists
         os.makedirs(config.dirname, exist_ok=True)
-        
-        # Run simulation
-        coords = []
-        max_n_steps = 0
-        n_exited = 0
-        exit_times = []
-        
-        for i in range(config.n_particles):
-            print(f"Simulating particle {i+1}/{config.n_particles}...")
-            
-            x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
+
+        coords, exit_times = [], []
+        max_n_steps = n_exited = 0
+
+        for i in tqdm(range(config.n_particles),
+                      desc="Particles",
+                      unit="particle"):
+            x_coords, y_coords, exit_time, *_ = sim.move(
                 config,
-                theta=i*2*np.pi / config.n_particles
+                theta=i * 2 * np.pi / config.n_particles
             )
 
             max_n_steps = max(len(x_coords), max_n_steps)
             if exit_time != -1:
                 n_exited += 1
                 exit_times.append(exit_time)
+
             coords.append([x_coords, y_coords])
-        
-        # Export results
-        csv_filename = os.path.join(config.dirname, 'coords.csv')
-        with open(csv_filename, 'w', newline='') as f:
+
+        # Export to CSV
+        csv_filename = os.path.join(config.dirname, "coords.csv")
+        with open(csv_filename, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(['frame', 'particle', 'x', 'y'])
-            
-            for i, coord in enumerate(coords):
-                for j in range(len(coord[0])):
-                    writer.writerow([j, i, coord[0][j], coord[1][j]])
-        
-        # Write summary
-        print(f"\nSimulation complete!")
-        print(f"==================\n\n")
-        print(f"Results:\n")
-        print(f"  Particles completed: {len(coords)}\n")
-        print(f"  Particles exited: {n_exited}\n")
-        print(f"  Maximum steps: {max_n_steps}\n")
+            writer.writerow(["frame", "particle", "x", "y"])
+            for p_idx, (xs, ys) in enumerate(coords):
+                for frame, (x, y) in enumerate(zip(xs, ys)):
+                    writer.writerow([frame, p_idx, x, y])
+
+        # Summary
+        print("\nSimulation complete!")
+        print("======================\n")
+        print(f"Particles simulated : {len(coords)}")
+        print(f"Particles exited    : {n_exited}")
+        print(f"Maximum steps       : {max_n_steps}")
         if exit_times:
-            print(f"  Average exit time: {np.mean(exit_times):.2e} s\n")
-        
-        print(f"Results saved to: {config.dirname}/")
-        print(f"  - {csv_filename}")
-        
+            print(f"Average exit time   : {np.mean(exit_times):.2e} s")
+        print(f"\nData saved -> {csv_filename}")
+
         return True
-        
+
     except Exception as e:
         print(f"Error running simulation: {e}")
         return False
