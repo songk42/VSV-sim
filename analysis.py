@@ -46,7 +46,7 @@ def analyze(config: sim.SimulationConfig):
     velocity_driven = np.array([], float)
 
     for i in tqdm.tqdm(range(config.n_particles)):
-        sim_output = sim.move(config, 2*np.pi*i/config.n_particles, show_progress=False)
+        sim_output = sim.move(config, 2*np.pi*i/config.n_particles)
         max_n_steps = max(len(sim_output.x), max_n_steps)
 
         fh = sum(sim_output.distance_trap) * len(sim_output.distance_trap)/max(1, len(sim_output.distance_trap)+len(sim_output.distance_driven)) # flux
@@ -98,7 +98,7 @@ def displacement_vs_time(
     )
 
     for _ in tqdm.tqdm(range(n_particles)):
-        sim_output = sim.move(config, show_progress=False)
+        sim_output = sim.move(config)
         x = np.concatenate([np.array([7.5]), sim_output.x * 1e6])  # Convert to micrometers
         y = np.concatenate([np.array([0]), sim_output.y * 1e6])
         x_all.append(x)

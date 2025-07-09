@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QMessageBox)
 from PySide6.QtCore import QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPixmap, QFont, QKeySequence, QShortcut
+from tqdm import tqdm
 
 import simulation as sim
 
@@ -30,38 +31,41 @@ class SimulationWorker(QThread):
     def __init__(self, config: sim.SimulationConfig):
         super().__init__()
         self.config = config
-
+    @sim.timing
     def run(self):
         try:
-            coords = []
-            max_n_steps = 0
-            i = 0
-            n_exited = 0
-            exit_times = []
+            coords, exit_times = [], []
+            max_n_steps = n_exited = 0
 
-            while i < self.config.n_particles:
-                # Emit progress update
-                self.progress_update.emit(i, self.config.n_particles)
+            # nice console bar; GUI still receives Qt signals
+            with tqdm(total=self.config.n_particles,
+                      desc="Particles",
+                      unit="particle",
+                      position=0,
+                      leave=False) as pbar:
 
-                try:
-                    x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
-                        self.config,
-                        2*np.pi*i/self.config.n_particles,
-                        self.config.dt,
-                    )
-                except Exception as e:
-                    self.error_occurred.emit(f"Error simulating particle {i}: {str(e)}")
-                    return
+                for i in range(self.config.n_particles):
+                    # Tell the GUI how many we’ve finished
+                    self.progress_update.emit(i, self.config.n_particles)
 
-                max_n_steps = max(len(x_coords), max_n_steps)
-                if exit_time != -1:
-                    n_exited += 1
-                    exit_times.append(exit_time)
-                coords.append([x_coords, y_coords])
-                print(f"Particle {i} completed successfully")
-                i += 1
+                    try:
+                        x_coords, y_coords, exit_time, *_ = sim.move(
+                            self.config,
+                            theta=i * 2 * np.pi / self.config.n_particles
+                        )
+                    except Exception as e:
+                        self.error_occurred.emit(f"Error simulating particle {i}: {str(e)}")
+                        return
 
-            # Final progress update
+                    max_n_steps = max(len(x_coords), max_n_steps)
+                    if exit_time != -1:
+                        n_exited += 1
+                        exit_times.append(exit_time)
+
+                    coords.append([x_coords, y_coords])
+                    pbar.update(1)
+
+            # Final GUI update
             self.progress_update.emit(self.config.n_particles, self.config.n_particles)
 
             print(f"Simulation complete: {n_exited}/{self.config.n_particles} particles exited")
