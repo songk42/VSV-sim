@@ -141,7 +141,7 @@ def run_headless_simulation(config: sim.SimulationConfig) -> bool:
             
             x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
                 config,
-                2*np.pi*i/config.n_particles,
+                theta=i*2*np.pi / config.n_particles
             )
 
             max_n_steps = max(len(x_coords), max_n_steps)

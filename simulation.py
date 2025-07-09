@@ -1,5 +1,7 @@
 import argparse
+import time
 from dataclasses import dataclass
+from functools import wraps
 from typing import NamedTuple
 
 import numpy as np
@@ -8,8 +10,7 @@ from matplotlib import pyplot as plt
 import statistics as st
 import tqdm
 from numba import njit
-
-from point import Point
+from numba.typed import List
 
 eta = 0.006 # Pa-s
 R = 8.6e-8 # radius of particle (m)
@@ -17,6 +18,7 @@ Kb = 1.38064852e-23 # Boltzmann constant
 T = 37 + 273.15 # K
 g = 6 * np.pi * eta * R  # viscous drag coefficient
 D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
+k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
 
 CELL_RADIUS = 1.502e-5  # radius of cell (m)
 NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
@@ -25,6 +27,18 @@ TRAP_DIST = 1.7e-7  # distance between traps (m)
 TRAP_STD = 2.1e-7  # standard deviation of trap distance (m)
 TIME_BETWEEN_STATES = 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
+
+
+def timing(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        end = time.perf_counter()
+        print(f"{func.__name__!r} took {end - start:.4f} seconds")
+        return result
+    return wrapper
+
 
 @dataclass
 class SimulationConfig:
@@ -69,218 +83,166 @@ class SimulationOutput(NamedTuple):
     velocity_trap: np.ndarray  # velocities during hopping states
 
 
-def move(
-        config: SimulationConfig,
-        theta: float = 0,
-        show_progress: bool = True,
-) -> SimulationOutput:
-    '''
-    Simulate the movement of a particle in a cell.
-    Parameters:
-        config: SimulationConfig object containing simulation parameters.
-        theta: Initial angle of the particle in radians (default is 0).
-        show_progress: Whether to show a progress bar (default is True).
-    Returns:
-        SimulationOutput: Contains the x and y coordinates of the particle,
-        the time at which the particle exits the cell, distances traveled during
-        hopping and driven states, and velocities during those states.
-    '''
+@njit(cache=True)
+def truncated_gauss(mu, sigma, low=-np.inf, high=np.inf):
+    """Gaussian sample truncated to [low, high] – numba compatible."""
+    while True:
+        x = np.random.normal(mu, sigma)
+        if x >= low and x <= high:
+            return x
 
-    def calc_directed_step(current_x, current_y, reverse_direction):
-        dr = random.gauss(MOTOR_PROTEIN_SPEED*config.dt, MOTOR_PROTEIN_SPEED*config.dt)
-        theta = np.arctan(current_y/current_x)
-        if current_x < 0:
-            theta += np.pi
-        if reverse_direction:
-            theta += np.pi
-        next_x = current_x + dr * np.cos(theta) + random.gauss(0, 2e-9)
-        next_y = current_y + dr * np.sin(theta) + random.gauss(0, 2e-9)
+@njit(cache=True)
+def outside_nucleus(x, y):
+    return x * x + y * y > NUCLEUS_RADIUS ** 2
 
-        if outside_nucleus(next_x, next_y):
-            return Point(next_x, next_y)
-        else: # Recursively calculate directed steps until one is outside nucleus
-            return calc_directed_step(current_x, current_y, reverse_direction)
+@njit(cache=True)
+def calc_directed_step(curr_x, curr_y, reverse_direction, dt):
+    dr = np.random.normal(MOTOR_PROTEIN_SPEED * dt, MOTOR_PROTEIN_SPEED * dt)
+
+    theta = np.arctan2(curr_y, curr_x)
+    if reverse_direction:
+        theta += np.pi
+
+    jitter = 2e-9
+    while True:
+        nx = curr_x + dr * np.cos(theta) + np.random.normal(0.0, jitter)
+        ny = curr_y + dr * np.sin(theta) + np.random.normal(0.0, jitter)
+        if outside_nucleus(nx, ny):
+            return nx, ny      # <-- tuple instead of Point
 
 
-    def calc_diffusive_step(current_x, current_y, trap_x_center, trap_y_center):
-        # 1. Restoring‐force (drift) displacement
-        displacement_from_center_x = current_x - trap_x_center
-        displacement_from_center_y = current_y - trap_y_center
+@njit(cache=True)
+def calc_diffusive_step(curr_x, curr_y,
+                        trap_x, trap_y,
+                        dt):
+    diff_std   = np.sqrt(2.0 * D * dt)
+    jitter_std = 2e-9
 
-        trap_force_x = -k * displacement_from_center_x
-        trap_force_y = -k * displacement_from_center_y
+    fx = -k * (curr_x - trap_x)
+    fy = -k * (curr_y - trap_y)
+    drift_x = (fx / g) * dt
+    drift_y = (fy / g) * dt
 
-        drift_disp_x = (trap_force_x / g) * config.dt
-        drift_disp_y = (trap_force_y / g) * config.dt
+    while True:
+        nx = curr_x + drift_x + diff_std * np.random.normal() \
+             + np.random.normal(0.0, jitter_std)
+        ny = curr_y + drift_y + diff_std * np.random.normal() \
+             + np.random.normal(0.0, jitter_std)
+        if outside_nucleus(nx, ny):
+            return nx, ny      # tuple instead of Point
 
-        # 2. Thermal‐diffusion displacement
-        diffusion_std = np.sqrt(2 * D * config.dt)
+@njit(cache=True)
+def calc_new_trap_position(trap_x, trap_y, trap_dist, trap_std):
+    while True:
+        r     = truncated_gauss(trap_dist, trap_std, 0.0, np.inf)
+        theta = np.random.uniform(0.0, 2.0 * np.pi)
+        nx    = trap_x + r * np.cos(theta)
+        ny    = trap_y + r * np.sin(theta)
+        if outside_nucleus(nx, ny):
+            return nx, ny
 
-        while True:
-            diffusion_disp_x = diffusion_std * random.gauss(0, 1)
-            diffusion_disp_y = diffusion_std * random.gauss(0, 1)
-
-            # 3. Fine‐scale jitter
-            jitter_std = 2e-9  # meters
-
-            jitter_disp_x = random.gauss(0, jitter_std)
-            jitter_disp_y = random.gauss(0, jitter_std)
-
-            # 4. Sum all contributions into the total step
-            dx = drift_disp_x + diffusion_disp_x + jitter_disp_x
-            dy = drift_disp_y + diffusion_disp_y + jitter_disp_y
-
-            # 5. Compute the candidate next position
-            next_x = current_x + dx
-            next_y = current_y + dy
-
-            if outside_nucleus(next_x, next_y):
-                return Point(next_x, next_y)
-
-
-    def calc_new_trap_position(trap_x, trap_y):
-        while True:
-            # 1. calculate random direction and distance
-            r = truncated_gauss(config.trap_dist, config.trap_std, low=0)
-            theta = truncated_gauss(0,0.8 * np.pi,low=-2 * np.pi,high=2 * np.pi)
-
-            # 2. propose new center coordinates
-            new_trap_x = trap_x + r * np.cos(theta)
-            new_trap_y = trap_y + r * np.sin(theta)
-
-            # 3. only accept if it's outside the nucleus
-            if outside_nucleus(new_trap_x, new_trap_y):
-                return Point(new_trap_x, new_trap_y)
+@njit(cache=True)
+def set_state_duration(mean_len):
+    dur = -1.0
+    while dur < 0.0:
+        dur = np.random.normal(mean_len, mean_len)
+    return dur
 
 
-    k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
+@njit(nopython=True, cache=True)
+def _move(total_time, dt,
+          p_driv, mean_len,
+          trap_dist, trap_std, theta):
 
-    n_steps = int(config.total_time/config.dt) + 1
+    n_steps = int(total_time / dt) + 1
+    x_hist  = np.empty(n_steps, dtype=np.float64)
+    y_hist  = np.empty(n_steps, dtype=np.float64)
 
-    x_history = np.empty(n_steps, dtype=np.float64)
-    y_history = np.empty(n_steps, dtype=np.float64)
+    # variable-length typed lists
+    dist_trap   = List.empty_list(np.float64)
+    dist_driven = List.empty_list(np.float64)
+    vel_trap    = List.empty_list(np.float64)
+    vel_driven  = List.empty_list(np.float64)
 
-    next_x = trap_x_center = x_history[0] = CELL_RADIUS/2 * np.cos(theta)
-    next_y = trap_y_center = y_history[0] = CELL_RADIUS/2 * np.sin(theta)
+    # Initial positions
+    x_hist[0] = trap_x = 0.5 * CELL_RADIUS * np.cos(theta)
+    y_hist[0] = trap_y = 0.5 * CELL_RADIUS * np.sin(theta)
 
-    # effective probability, b/c p_driv should be time-based and this program doesn't treat it as such
-    # if p_driv != 0 and p_driv != 1:
-    #     p_driv *= (time_between / (1 - p_driv + time_between*p_driv))
+    # generate state schedule on the fly
+    driven_prev   = np.random.random() < p_driv
+    switch_time   = set_state_duration(mean_len)
+    start_idx     = 0
+    reverse_next  = False
+    exit_time     = -1.0
+    final_i       = 0
 
-    def set_state_duration(d):
-        state_length = -1
-        while state_length < 0:
-            state_length = random.gauss(config.time_between, config.time_between)
-        return state_length
+    for i in range(1, n_steps):
+        t = i * dt
 
-    # determine when particle changes states
-    state_switch_times = []
-    curr = random.random() < config.p_driv
-    state_length = set_state_duration(curr)
-    driven = [curr]
-
-    state_end_time = state_length
-    for i, t in enumerate(np.arange(0, config.total_time+2*config.dt, config.dt)):
-        if t >= state_end_time:
-            state_switch_times.append(i)
-            curr = random.random() < config.p_driv
-            state_length = set_state_duration(curr)
-            state_end_time = state_end_time + state_length
-        driven.append(curr)
-
-    distance_trap = []
-    distance_driven = []
-    velocity_driven = []
-    velocity_trap = []
-
-    exit_time = -1
-    start_of_state = 0
-    reverse_direction = False
-
-    def outside_nucleus(x, y):
-        return x**2 + y**2 > NUCLEUS_RADIUS**2
-
-
-    frame_iterable = enumerate(np.arange(config.dt, config.total_time+config.dt, config.dt))
-    if show_progress:
-        frame_iterable = tqdm.tqdm(
-            frame_iterable,
-            total=config.total_time,
-            unit=" virtual s",
-            unit_scale=config.dt,
-            desc="Time elapsed in simulation"
-        )
-
-    for i, t in frame_iterable:
-        # Update current_x, current_y
-        current_x = next_x
-        current_y = next_y
-
-        # Calc next position
-        if driven[i]:
-            next_pos = calc_directed_step(current_x,current_y,reverse_direction=reverse_direction)
-        else:
-            next_pos = calc_diffusive_step(current_x,current_y,trap_x_center=trap_x_center, trap_y_center=trap_y_center)
-        next_x = next_pos.x
-        next_y = next_pos.y
-
-        # Record particle position
-        x_history[i+1] = next_x
-        y_history[i+1] = next_y
-
-        # Update trap center
-        # If driven, have trap follow particle
-        if driven[i]:
-            trap_x_center = next_x
-            trap_y_center = next_y
-
-        # If in active diffusion, only move trap if particle just escaped its trap
-        # We say particles escape their trap when a state_switch_time occurs and both the original and new state are active diffusion
-        state_just_switched = i in state_switch_times
-        next_state_will_be_trap_state = not driven[i+1]
-        particle_just_escaped_trap = not driven[i] and state_just_switched and next_state_will_be_trap_state
-        if particle_just_escaped_trap:
-            new_trap_center = calc_new_trap_position(trap_x_center, trap_y_center)
-            trap_x_center = new_trap_center.x
-            trap_y_center = new_trap_center.y
-
-        # determine the direction of the next bout of driven motion
-        if state_just_switched:
-            reverse_direction = random.random()<0.5
-
-        v_current = np.sqrt( (next_x - current_x)**2 + (next_y - current_y)**2 ) / config.dt
-
-        # store velocity information
-        if driven[i]:
-            velocity_driven.append(v_current)
-        else:
-            velocity_trap.append(v_current)
-
-        # distance traveled over the course of a particular state
-        if i in state_switch_times:
-            dist = np.sqrt((next_x - x_history[start_of_state])**2 + (next_y - y_history[start_of_state])**2)
-            if driven[i]:
-                distance_driven.append(dist)
+        # change state?
+        if t >= switch_time:
+            # finish previous run
+            dist = np.hypot(x_hist[i-1] - x_hist[start_idx],
+                            y_hist[i-1] - y_hist[start_idx])
+            if driven_prev:
+                dist_driven.append(dist)
             else:
-                distance_trap.append(dist)
-            start_of_state = i+1
+                dist_trap.append(dist)
 
-        # Exit if particle escape cell
-        if np.sqrt(next_x**2+next_y**2) > CELL_RADIUS:
+            start_idx = i - 1
+            driven_prev = np.random.random() < p_driv
+            switch_time += set_state_duration(mean_len)
+            reverse_next = np.random.random() < 0.5
+
+            # trap-to-trap hop
+            if not driven_prev:
+                trap_x, trap_y = calc_new_trap_position(
+                    trap_x, trap_y, trap_dist, trap_std)
+
+        # integrate one step
+        if driven_prev:
+            nx, ny = calc_directed_step(
+                x_hist[i-1], y_hist[i-1], reverse_next, dt)
+        else:
+            nx, ny = calc_diffusive_step(
+                x_hist[i-1], y_hist[i-1], trap_x, trap_y, dt)
+
+        # trap follows during driven periods
+        if driven_prev:
+            trap_x, trap_y = nx, ny
+
+        x_hist[i] = nx
+        y_hist[i] = ny
+
+        v_now = np.hypot(nx - x_hist[i-1], ny - y_hist[i-1]) / dt
+        if driven_prev:
+            vel_driven.append(v_now)
+        else:
+            vel_trap.append(v_now)
+
+        # left the cell?
+        if np.hypot(nx, ny) > CELL_RADIUS:
             exit_time = t
-            if config.end_early: break
+            final_i   = i
+            break
+    else:
+        final_i = n_steps - 1
+
+    return (x_hist[:final_i + 1],
+            y_hist[:final_i + 1],
+            exit_time,
+            dist_trap,
+            dist_driven,
+            vel_driven,
+            vel_trap)
 
 
-
-    return SimulationOutput(
-        x=np.asarray(x_history),
-        y=np.asarray(y_history),
-        exit_time=exit_time,
-        distance_trap=np.asarray(distance_trap),
-        distance_driven=np.asarray(distance_driven),
-        velocity_driven=np.asarray(velocity_driven),
-        velocity_trap=np.asarray(velocity_trap),
-    )
+def move(config, theta: float = 0.0):
+    """Acts as a wrapper for _move, passing in arguments
+    so the njit doesn't need to handle SimulationConfig objects"""
+    return _move(config.total_time, config.dt,
+                 config.p_driv, config.time_between,
+                 config.trap_dist, config.trap_std, theta)
 
 
 def graph(
@@ -304,10 +266,3 @@ def graph(
     plt.plot(centerx, centery)
     plt.show()
 
-@njit
-def truncated_gauss(mu, sigma, low=None, high=None):
-    """Return a Gaussian(μ,σ) sample allowing truncating >= low and/or <= high."""
-    while True:
-        x = random.gauss(mu, sigma)
-        if (low is None or x >= low) and (high is None or x <= high):
-            return x

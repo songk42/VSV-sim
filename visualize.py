@@ -30,7 +30,7 @@ class SimulationWorker(QThread):
     def __init__(self, config: sim.SimulationConfig):
         super().__init__()
         self.config = config
-
+    @sim.timing
     def run(self):
         try:
             coords = []
@@ -46,8 +46,7 @@ class SimulationWorker(QThread):
                 try:
                     x_coords, y_coords, exit_time, _, _, _, _ = sim.move(
                         self.config,
-                        2*np.pi*i/self.config.n_particles,
-                        self.config.dt,
+                        theta=i*2*np.pi / self.config.n_particles
                     )
                 except Exception as e:
                     self.error_occurred.emit(f"Error simulating particle {i}: {str(e)}")
