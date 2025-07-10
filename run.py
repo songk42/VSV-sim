@@ -9,6 +9,7 @@ from tqdm import tqdm
 
 import simulation as sim
 import visualize as vis
+from analysis import analyze, displacement_vs_time, plot_displacement_vs_time_varying_driven
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -214,4 +215,50 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    generate_displacement_time_driven_graph()
+
+
+def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_time = 600):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import simulation as sim
+
+    do_analysis = True
+
+    if do_analysis:
+
+        plt.figure()
+
+        # Get displacement vs time curves
+        plot_displacement_vs_time_varying_driven(
+            total_time  = total_time,
+            n_particles = n_particles,
+            p_driv_vals = [0,3,6,12,24,50,100],
+        )
+
+        plt.xlabel("time (s)")
+        plt.ylabel("Displacement (µm)")
+        plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
+        plt.legend()
+
+        plt.show()
+
+
+        # PLOT
+        # Displacement vs. Time for Varying Driven Motion Amounts
+        # Uses signed displacement
+        plt.figure()
+        plt.xlabel("time (s)")
+        plt.ylabel("Displacement (µm)")
+        plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
+        plt.legend()
+
+        # Mean-squared displacement
+        plt.figure()
+        plt.loglog(t[1:], msd[1:])      # skip t=0 to avoid log(0)
+        plt.xlabel("time (s)")
+        plt.ylabel("MSD (µm²)")
+        plt.title("Mean-squared displacement")
+
+        plt.show()

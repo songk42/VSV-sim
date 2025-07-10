@@ -171,8 +171,7 @@ def generate_state_duration(time_between_state_changes):
         if dur > 0.0:
             return dur
 
-
-@njit(nopython=True, cache=True)
+@njit(cache=True)
 def _move(total_time, dt,
           p_driv, avg_state_duration,
           trap_dist, trap_std, theta):
@@ -268,14 +267,36 @@ def _move(total_time, dt,
             vel_driven,
             vel_trap)
 
-
 def move(config, theta: float = 0.0):
     """Acts as a wrapper for _move, passing in arguments
-    so the njit doesn't need to handle SimulationConfig objects"""
-    return _move(config.total_time, config.dt,
-                 config.p_driv, config.time_between,
-                 config.trap_dist, config.trap_std, theta)
+    so the njit doesn't need to handle SimulationConfig objects
 
+    Returns:
+        SimulationOutput: A named tuple containing:
+            x (np.ndarray): x-coordinates of the particle
+            y (np.ndarray): y-coordinates of the particle
+            exit_time (float): Time at which particle exits cell (-1 if doesn't exit)
+            distance_trap (list): Distances traveled during hopping states
+            distance_driven (list): Distances traveled during driven states
+            velocity_driven (list): Velocities during driven states
+            velocity_trap (list): Velocities during hopping states
+    """
+
+    x, y, exit_time, dist_trap, dist_driven, vel_driven, vel_trap = _move(
+        config.total_time, config.dt,
+        config.p_driv, config.time_between,
+        config.trap_dist, config.trap_std, theta
+    )
+
+    return SimulationOutput(
+        x=np.array(x),
+        y=np.array(y),
+        exit_time=exit_time,
+        distance_trap=np.array(dist_trap),
+        distance_driven=np.array(dist_driven),
+        velocity_driven=np.array(vel_driven),
+        velocity_trap=np.array(vel_trap)
+    )
 
 def graph(
     config: SimulationConfig,
