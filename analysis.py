@@ -151,45 +151,50 @@ def displacement_vs_time(
     return mean_dist, mean_disp, mean_squared_disp
 
 
-def plot_displacement_vs_time_varying_driven(
+def plot_displacement_vs_time_line(
         p_driv_vals, # list of percentages of driven motion which should be tested
         n_particles,
+        colors = None,
         total_time = 600,
         dt = 0.001
 ):
-    for p_driv in tqdm.tqdm(p_driv_vals, desc="Running simulations for each driven probability", unit="driven probabilities"):
-        config = sim.SimulationConfig(
-            n_particles=n_particles,
-            total_time=total_time,
-            p_driv=p_driv,
-            end_early=False,
-        )
+    if colors is None:
+        colors = list(mcolors.CSS4_COLORS.keys())[:len(p_driv_vals)]
+    with tqdm.tqdm(total=len(p_driv_vals) * n_particles, desc="Running simulations for each driven probability", unit="particle") as pbar:
+        for i, p_driv in enumerate(p_driv_vals):
+            config = sim.SimulationConfig(
+                n_particles=n_particles,
+                total_time=total_time,
+                p_driv=p_driv,
+                end_early=False,
+            )
 
-        x_all = []
-        y_all = []
-        for _ in range(n_particles):
-            sim_output = sim.move(config)
-            x = np.concatenate([np.array([7.5]), sim_output.x * 1e6])  # Convert to micrometers
-            y = np.concatenate([np.array([0]), sim_output.y * 1e6])
-            x_all.append(x)
-            y_all.append(y)
+            x_all = []
+            y_all = []
+            for _ in range(n_particles):
+                sim_output = sim.move(config, stop_on_cell_exit=False)
+                x = np.concatenate([np.array([7.5]), sim_output.x * 1e6])  # Convert to micrometers
+                y = np.concatenate([np.array([0]), sim_output.y * 1e6])
+                x_all.append(x)
+                y_all.append(y)
+                pbar.update(1)
 
-        # Find the maximum trajectory length
-        max_len = max(len(x) for x in x_all)
+            # Find the maximum trajectory length
+            max_len = max(len(x) for x in x_all)
 
-        # Pad each trajectory with the last value to make them all the same length
-        x_all_padded = np.array([np.pad(x, (0, max_len - len(x)), mode='edge') for x in x_all])
-        y_all_padded = np.array([np.pad(y, (0, max_len - len(y)), mode='edge') for y in y_all])
+            # Pad each trajectory with the last value to make them all the same length
+            x_all_padded = np.array([np.pad(x, (0, max_len - len(x)), mode='edge') for x in x_all])
+            y_all_padded = np.array([np.pad(y, (0, max_len - len(y)), mode='edge') for y in y_all])
 
+            # Calculate mean signed displacement around 0
+            displacements = np.sqrt(x_all_padded**2 + y_all_padded**2)
+            displacements -= 7.5 # Center the displacement around 0
+            mean_signed = np.mean(displacements, axis=0)
 
-        # Calculate mean signed displacement around 0
-        displacements = np.sqrt(x_all_padded**2 + y_all_padded**2)
-        displacements -= 7.5 # Center the displacement around 0
-        mean_signed = np.mean(displacements, axis=0)
+            # Set up time axis
+            t = np.arange(len(mean_signed)) * dt    # time axis (s)
 
-        # Set up time axis
-        t = np.arange(len(mean_signed)) * dt    # time axis (s)
+            # Plot
+            plt.plot(t, mean_signed, label=p_driv, color=colors[i])
 
-        # Plot
-        plt.plot(t, mean_signed, label="⟨r − r₀⟩ (signed)")
 

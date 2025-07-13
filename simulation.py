@@ -174,7 +174,7 @@ def generate_state_duration(time_between_state_changes):
 @njit(cache=True)
 def _move(total_time, dt,
           p_driv, avg_state_duration,
-          trap_dist, trap_std, theta):
+          trap_dist, trap_std, theta, stop_on_cell_exit):
 
     # Pre-allocate trajectory arrays
     total_time_steps = int(total_time / dt) + 1
@@ -257,7 +257,9 @@ def _move(total_time, dt,
         if np.hypot(new_x, new_y) > CELL_RADIUS:
             exit_time = current_time
             final_i   = i
-            break
+
+            if stop_on_cell_exit:
+                break
 
     return (x_history[:final_i + 1],
             y_history[:final_i + 1],
@@ -267,7 +269,7 @@ def _move(total_time, dt,
             vel_driven,
             vel_trap)
 
-def move(config, theta: float = 0.0):
+def move(config, theta: float = 0.0, stop_on_cell_exit = True):
     """Acts as a wrapper for _move, passing in arguments
     so the njit doesn't need to handle SimulationConfig objects
 
@@ -285,7 +287,7 @@ def move(config, theta: float = 0.0):
     x, y, exit_time, dist_trap, dist_driven, vel_driven, vel_trap = _move(
         config.total_time, config.dt,
         config.p_driv, config.time_between,
-        config.trap_dist, config.trap_std, theta
+        config.trap_dist, config.trap_std, theta, stop_on_cell_exit
     )
 
     return SimulationOutput(

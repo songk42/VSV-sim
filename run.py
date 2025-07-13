@@ -6,10 +6,9 @@ import numpy as np
 import os
 from PySide6.QtWidgets import QApplication
 from tqdm import tqdm
-
 import simulation as sim
 import visualize as vis
-from analysis import analyze, displacement_vs_time, plot_displacement_vs_time_varying_driven
+from analysis import analyze, displacement_vs_time, plot_displacement_vs_time_line
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -18,7 +17,7 @@ def parse_arguments() -> argparse.Namespace:
         description="Particle Simulation Visualizer",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    
+
     # Simulation parameters
     sim_group = parser.add_argument_group('Simulation Parameters')
     sim_group.add_argument(
@@ -49,7 +48,7 @@ def parse_arguments() -> argparse.Namespace:
         '--dt', type=float, default=0.001,
         help='Length of time step for simulation (seconds)'
     )
-    
+
     # Output options
     output_group = parser.add_argument_group('Output Options')
     output_group.add_argument(
@@ -60,7 +59,7 @@ def parse_arguments() -> argparse.Namespace:
         '--record_frames', action='store_true',
         help='Automatically start recording frames on startup'
     )
-    
+
     # Display options
     display_group = parser.add_argument_group('Display Options')
     display_group.add_argument(
@@ -71,14 +70,14 @@ def parse_arguments() -> argparse.Namespace:
         '--height', type=int, default=600,
         help='Canvas height in pixels'
     )
-    
+
     # Special modes
     mode_group = parser.add_argument_group('Special Modes')
     mode_group.add_argument(
         '--headless', action='store_true',
         help='Run simulation without GUI (exports data only)', default=False
     )
-    
+
     # Help and examples
     parser.epilog = """
 Examples:
@@ -88,14 +87,14 @@ Examples:
   %(prog)s --width 800 --height 800          # Larger display window
   %(prog)s --headless --dirname run          # Run without GUI
     """
-    
+
     return parser.parse_args()
 
 
 def validate_arguments(args: argparse.Namespace) -> bool:
     """Validate command line arguments"""
     errors = []
-    
+
     # Validate ranges
     if args.total_time <= 0:
         errors.append("total_time must be positive")
@@ -107,20 +106,20 @@ def validate_arguments(args: argparse.Namespace) -> bool:
         errors.append("dt must be positive")
     if args.width <= 0 or args.height <= 0:
         errors.append("width and height must be positive")
-    
+
     # Validate optional parameters
     if args.trap_dist is not None and args.trap_dist <= 0:
         errors.append("trap_dist must be positive")
     if args.time_between is not None and args.time_between <= 0:
         errors.append("time_between must be positive")
-    
+
     # Display errors
     if errors:
         print("Error: Invalid arguments:")
         for error in errors:
             print(f"  - {error}")
         return False
-    
+
     return True
 
 def run_headless_simulation(config: sim.SimulationConfig) -> bool:
@@ -178,10 +177,10 @@ def main():
     """Main application entry point"""
     # Parse and validate arguments
     args = parse_arguments()
-    
+
     if not validate_arguments(args):
         sys.exit(1)
-    
+
     # Create configuration
     config = sim.SimulationConfig.from_args(args)
 
@@ -198,26 +197,20 @@ def main():
     else:
         print(f"  Display: {config.width}x{config.height}")
     print()
-    
+
     # Run headless simulation if requested
     if args.headless:
         success = run_headless_simulation(config)
         sys.exit(0 if success else 1)
-    
+
     # Run GUI application
     app = QApplication(sys.argv)
-    
+
     simulation = vis.SimulationVis(config)
     simulation.show()
     simulation.run_simulation()
-    
+
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    # main()
-    generate_displacement_time_driven_graph()
-
 
 def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_time = 600):
     import numpy as np
@@ -228,37 +221,30 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
 
     if do_analysis:
 
+        # Create chart
         plt.figure()
 
-        # Get displacement vs time curves
-        plot_displacement_vs_time_varying_driven(
+        # Calculate and plot lines for each p_driv value on chart
+        plot_displacement_vs_time_line(
             total_time  = total_time,
             n_particles = n_particles,
-            p_driv_vals = [0,3,6,12,24,50,100],
+            p_driv_vals = [100,50,24,12,6,3,0],
+            colors = ['#2ba03b', '#e77cc2', '#ecb01f', '#926aba', 'red', '#0079b1', '#f98436']
         )
 
+        # Add labels, title, legend to chart
         plt.xlabel("time (s)")
         plt.ylabel("Displacement (µm)")
         plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
         plt.legend()
+        plt.xlim([0, 1000])
+        plt.ylim([0, 50])
 
+        # Show chart
         plt.show()
 
 
-        # PLOT
-        # Displacement vs. Time for Varying Driven Motion Amounts
-        # Uses signed displacement
-        plt.figure()
-        plt.xlabel("time (s)")
-        plt.ylabel("Displacement (µm)")
-        plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
-        plt.legend()
 
-        # Mean-squared displacement
-        plt.figure()
-        plt.loglog(t[1:], msd[1:])      # skip t=0 to avoid log(0)
-        plt.xlabel("time (s)")
-        plt.ylabel("MSD (µm²)")
-        plt.title("Mean-squared displacement")
-
-        plt.show()
+if __name__ == "__main__":
+    # main()
+    generate_displacement_time_driven_graph(n_particles=30, total_time=600)
