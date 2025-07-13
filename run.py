@@ -228,7 +228,7 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plot_displacement_vs_time_line(
             total_time  = total_time,
             n_particles = n_particles,
-            p_driv_vals = [100,50,24,12,6,3,0],
+            p_driv_vals = [1,.50,.24,.12,.06,.03,0],
             colors = ['#2ba03b', '#e77cc2', '#ecb01f', '#926aba', 'red', '#0079b1', '#f98436']
         )
 
@@ -247,4 +247,4 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
 
 if __name__ == "__main__":
     # main()
-    generate_displacement_time_driven_graph(n_particles=30, total_time=600)
+    generate_displacement_time_driven_graph(n_particles=50, total_time=1000)

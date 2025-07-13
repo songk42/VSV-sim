@@ -5,6 +5,7 @@ import os
 
 from matplotlib import pyplot as plt
 from matplotlib.cbook import print_cycles
+import matplotlib.colors as mcolors
 
 import simulation as sim
 import tqdm
@@ -168,6 +169,7 @@ def plot_displacement_vs_time_line(
                 p_driv=p_driv,
                 end_early=False,
             )
+            # print(f"Running move for p_driv {config.p_driv}")
 
             x_all = []
             y_all = []

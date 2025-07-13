@@ -127,14 +127,14 @@ def calc_diffusive_step(current_x, current_y, trap_x_center, trap_y_center, dt):
     diffusion_std = np.sqrt(2 * D * dt)
 
     while True:
-        diffusion_disp_x = diffusion_std * random.gauss(0, 1)
-        diffusion_disp_y = diffusion_std * random.gauss(0, 1)
+        diffusion_disp_x = diffusion_std * np.random.normal(0, 1)
+        diffusion_disp_y = diffusion_std * np.random.normal(0, 1)
 
         # 3. Fine‐scale jitter
         jitter_std = 2e-9  # meters
 
-        jitter_disp_x = random.gauss(0, jitter_std)
-        jitter_disp_y = random.gauss(0, jitter_std)
+        jitter_disp_x = np.random.normal(0, jitter_std)
+        jitter_disp_y = np.random.normal(0, jitter_std)
 
         # 4. Sum all contributions into the total step
         dx = drift_disp_x + diffusion_disp_x + jitter_disp_x
@@ -177,16 +177,22 @@ def _move(total_time, dt,
           trap_dist, trap_std, theta, stop_on_cell_exit):
 
     # Pre-allocate trajectory arrays
-    total_time_steps = int(total_time / dt) + 1
-    x_history  = np.empty(total_time_steps, dtype=np.float64)
-    y_history  = np.empty(total_time_steps, dtype=np.float64)
-    final_i = total_time_steps - 1
+    max_states = int(total_time / dt) + 1
+    x_history  = np.empty(max_states, dtype=np.float64)
+    y_history  = np.empty(max_states, dtype=np.float64)
+    final_i = max_states - 1
 
-    # Initialize variable-length typed lists for state metrics
-    dist_trap   = List.empty_list(np.float64)
-    dist_driven = List.empty_list(np.float64)
-    vel_trap    = List.empty_list(np.float64)
-    vel_driven  = List.empty_list(np.float64)
+    # Initialize fixed-size numpy buffers
+    diffusive_distance = np.empty(max_states,  dtype=np.float64)
+    driven_distance = np.empty_like(diffusive_distance)
+    diffusive_velocity = np.empty_like(diffusive_distance)
+    driven_velocity = np.empty_like(diffusive_distance)
+
+    # Buffer indices we're writing to (replacing expensive .append calls)
+    diffusive_distance_index = 0
+    driven_distance_index  = 0
+    diffusive_velocity_index  = 0
+    driven_velocity_index   = 0
 
     # Initial positions (particles evenly spaced out halfway between nucleus and cell membrane)
     start_radius = CELL_RADIUS / 2
@@ -201,7 +207,7 @@ def _move(total_time, dt,
     exit_time         = -1.0
 
     # MAIN SIMULATION LOOP
-    for i in range(1, total_time_steps):
+    for i in range(1, max_states):
         current_time = i * dt
 
         # Check for state change
@@ -212,9 +218,11 @@ def _move(total_time, dt,
             dy = y_history[i-1] - y_history[state_start_index]
             dist = np.hypot(dx, dy)
             if is_driven:
-                dist_driven.append(dist)
+                driven_distance[driven_distance_index] = dist
+                driven_distance_index += 1
             else:
-                dist_trap.append(dist)
+                diffusive_distance[diffusive_distance_index] = dist
+                diffusive_distance_index += 1
 
             # Reset state tracking, decide next state
             state_start_index = i - 1
@@ -249,9 +257,11 @@ def _move(total_time, dt,
         # Record velocity by state type
         v_now = np.hypot(new_x - x_history[i-1], new_y - y_history[i-1]) / dt
         if is_driven:
-            vel_driven.append(v_now)
+            driven_velocity[driven_velocity_index] = v_now
+            driven_velocity_index += 1
         else:
-            vel_trap.append(v_now)
+            diffusive_velocity[diffusive_velocity_index] = v_now
+            diffusive_velocity_index += 1
 
         # Check for cell exit
         if np.hypot(new_x, new_y) > CELL_RADIUS:
@@ -262,12 +272,12 @@ def _move(total_time, dt,
                 break
 
     return (x_history[:final_i + 1],
-            y_history[:final_i + 1],
-            exit_time,
-            dist_trap,
-            dist_driven,
-            vel_driven,
-            vel_trap)
+                         y_history[:final_i + 1],
+                         exit_time,
+                         diffusive_distance[:diffusive_distance_index].copy(),
+                         driven_distance[:driven_distance_index].copy(),
+                         driven_velocity[:driven_velocity_index].copy(),
+                         diffusive_velocity[:diffusive_velocity_index].copy())
 
 def move(config, theta: float = 0.0, stop_on_cell_exit = True):
     """Acts as a wrapper for _move, passing in arguments
@@ -284,7 +294,7 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
             velocity_trap (list): Velocities during hopping states
     """
 
-    x, y, exit_time, dist_trap, dist_driven, vel_driven, vel_trap = _move(
+    x, y, exit_time, dist_trap, distance_driven, vel_driven, vel_trap = _move(
         config.total_time, config.dt,
         config.p_driv, config.time_between,
         config.trap_dist, config.trap_std, theta, stop_on_cell_exit
@@ -295,7 +305,7 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
         y=np.array(y),
         exit_time=exit_time,
         distance_trap=np.array(dist_trap),
-        distance_driven=np.array(dist_driven),
+        distance_driven=np.array(distance_driven),
         velocity_driven=np.array(vel_driven),
         velocity_trap=np.array(vel_trap)
     )
