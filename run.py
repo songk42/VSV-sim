@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 from tqdm import tqdm
 import simulation as sim
 import visualize as vis
-from analysis import analyze, displacement_vs_time, plot_displacement_vs_time_line
+from analysis import plot_displacement_vs_time_line
 
 
 def parse_arguments() -> argparse.Namespace:

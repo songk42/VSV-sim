@@ -4,7 +4,6 @@ import numpy as np
 import os
 
 from matplotlib import pyplot as plt
-from matplotlib.cbook import print_cycles
 import matplotlib.colors as mcolors
 
 import simulation as sim

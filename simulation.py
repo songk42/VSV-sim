@@ -8,9 +8,7 @@ import numpy as np
 import random
 from matplotlib import pyplot as plt
 import statistics as st
-from tqdm import tqdm
 from numba import njit
-from numba.typed import List
 
 eta = 0.006 # Pa-s
 R = 8.6e-8 # radius of particle (m)
