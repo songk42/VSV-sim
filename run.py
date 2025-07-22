@@ -1,3 +1,4 @@
+import math
 import sys
 
 import argparse
@@ -237,7 +238,7 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.ylabel("Displacement (µm)")
         plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
         plt.legend()
-        plt.xlim([0, 1000])
+        plt.xlim([0, math.ceil(total_time / 1000) * 1000]) # Round total time up to the nearest thousand
         plt.ylim([0, 50])
 
         # Show chart
@@ -247,4 +248,5 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
 
 if __name__ == "__main__":
     # main()
-    generate_displacement_time_driven_graph(n_particles=50, total_time=1000)
+    # generate_displacement_time_driven_graph(n_particles=20, total_time=600)
+    generate_displacement_time_driven_graph(n_particles=20, total_time=3600)
