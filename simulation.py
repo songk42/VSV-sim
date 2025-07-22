@@ -23,7 +23,7 @@ NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
 TRAP_SIZE = 2.4e-7  # size of trap (m)
 TRAP_DIST = 1.7e-7  # distance between traps (m)
 TRAP_STD = 2.1e-7  # standard deviation of trap distance (m)
-TIME_BETWEEN_STATES = 0.41  # average time between states (s)
+TIME_BETWEEN_STATES = 0.03 # 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
 
@@ -171,36 +171,48 @@ def generate_state_duration(time_between_state_changes):
 
 @njit(cache=True)
 def _move(total_time, dt,
-          p_driv, avg_state_duration,
-          trap_dist, trap_std, theta, stop_on_cell_exit):
+          trap_dist, trap_std, theta, stop_on_cell_exit,
+          p_driv = 0.03, mean_driven_time = 0.6, std_driven_time  = 0.2):
+
+
+    # Compute matching diffusive‐state distribution
+    if p_driv == 0:
+        mean_diffusive = 600
+        std_diffusive  = 0
+    else:
+        mean_diffusive = mean_driven_time * (1.0 - p_driv) / p_driv
+        std_diffusive  = std_driven_time  * (1.0 - p_driv) / p_driv
 
     # Pre-allocate trajectory arrays
     max_states = int(total_time / dt) + 1
     x_history  = np.empty(max_states, dtype=np.float64)
     y_history  = np.empty(max_states, dtype=np.float64)
-    final_i = max_states - 1
+    final_i    = max_states - 1
 
     # Initialize fixed-size numpy buffers
-    diffusive_distance = np.empty(max_states,  dtype=np.float64)
-    driven_distance = np.empty_like(diffusive_distance)
-    diffusive_velocity = np.empty_like(diffusive_distance)
-    driven_velocity = np.empty_like(diffusive_distance)
+    diffusive_distance  = np.empty(max_states, dtype=np.float64)
+    driven_distance     = np.empty_like(diffusive_distance)
+    diffusive_velocity  = np.empty_like(diffusive_distance)
+    driven_velocity     = np.empty_like(diffusive_distance)
 
     # Buffer indices we're writing to (replacing expensive .append calls)
     diffusive_distance_index = 0
-    driven_distance_index  = 0
-    diffusive_velocity_index  = 0
-    driven_velocity_index   = 0
+    driven_distance_index    = 0
+    diffusive_velocity_index = 0
+    driven_velocity_index    = 0
 
     # Initial positions (particles evenly spaced out halfway between nucleus and cell membrane)
     start_radius = CELL_RADIUS / 2
     x_history[0] = trap_x = start_radius * np.cos(theta)
     y_history[0] = trap_y = start_radius * np.sin(theta)
 
-    # generate state schedule on the fly
-    is_driven         = np.random.random() < p_driv # Current state
-    next_switch_time  = generate_state_duration(avg_state_duration)
-    state_start_index = 0 # Index current state began
+    # Generate state schedule on the fly
+    is_driven = np.random.random() < p_driv
+    if is_driven:
+        next_switch_time = truncated_gauss(mean_driven_time, std_driven_time)
+    else:
+        next_switch_time = truncated_gauss(mean_diffusive, std_diffusive)
+    state_start_index = 0
     reverse_next      = False
     exit_time         = -1.0
 
@@ -210,10 +222,9 @@ def _move(total_time, dt,
 
         # Check for state change
         if current_time >= next_switch_time:
-
             # Record distance traveled in state
-            dx = x_history[i-1] - x_history[state_start_index]
-            dy = y_history[i-1] - y_history[state_start_index]
+            dx   = x_history[i-1] - x_history[state_start_index]
+            dy   = y_history[i-1] - y_history[state_start_index]
             dist = np.hypot(dx, dy)
             if is_driven:
                 driven_distance[driven_distance_index] = dist
@@ -224,36 +235,46 @@ def _move(total_time, dt,
 
             # Reset state tracking, decide next state
             state_start_index = i - 1
-            is_driven = np.random.random() < p_driv
+            was_driven        = is_driven
+            is_driven         = not was_driven
+
+            # Log transition
+            # print(f"{current_time}s: Just switched from "
+            #       f"{'driven to diffusive' if was_driven else 'diffusive to driven'}")
 
             # Schedule next state change
-            next_switch_time += generate_state_duration(avg_state_duration)
-            reverse_next = np.random.random() < 0.5 # 50% chance to reverse
+            if is_driven:
+                dur = truncated_gauss(mean_driven_time, std_driven_time)
+            else:
+                dur = truncated_gauss(mean_diffusive, std_diffusive)
+            next_switch_time = current_time + dur
+            reverse_next     = np.random.random() < 0.5  # 50% chance to reverse
 
             # If just switched to diffusive state, move trap
             if not is_driven:
-                # Particle could have been in a diffusive state before as well,
-                # so we'd consider this the particle escaping to a new trap
                 trap_x, trap_y = calc_new_trap_position(
                     trap_x, trap_y, trap_dist, trap_std
                 )
 
         # Calculate next position based on current state
         if is_driven:
-            new_x, new_y = calc_directed_step(x_history[i-1], y_history[i-1], reverse_next, dt)
-        else:
-            new_x, new_y = calc_diffusive_step(x_history[i-1], y_history[i-1], trap_x, trap_y, dt)
-
-        # During driven motion, trap follows particle
-        if is_driven:
+            new_x, new_y = calc_directed_step(
+                x_history[i-1], y_history[i-1], reverse_next, dt
+            )
+            # During driven motion, trap follows particle
             trap_x, trap_y = new_x, new_y
+        else:
+            new_x, new_y = calc_diffusive_step(
+                x_history[i-1], y_history[i-1], trap_x, trap_y, dt
+            )
 
         # Record position
         x_history[i] = new_x
         y_history[i] = new_y
 
         # Record velocity by state type
-        v_now = np.hypot(new_x - x_history[i-1], new_y - y_history[i-1]) / dt
+        v_now = np.hypot(new_x - x_history[i-1],
+                         new_y - y_history[i-1]) / dt
         if is_driven:
             driven_velocity[driven_velocity_index] = v_now
             driven_velocity_index += 1
@@ -265,17 +286,20 @@ def _move(total_time, dt,
         if np.hypot(new_x, new_y) > CELL_RADIUS:
             exit_time = current_time
             final_i   = i
-
             if stop_on_cell_exit:
                 break
 
-    return (x_history[:final_i + 1],
-                         y_history[:final_i + 1],
-                         exit_time,
-                         diffusive_distance[:diffusive_distance_index].copy(),
-                         driven_distance[:driven_distance_index].copy(),
-                         driven_velocity[:driven_velocity_index].copy(),
-                         diffusive_velocity[:diffusive_velocity_index].copy())
+    # Return trimmed arrays
+    return (
+        x_history[:final_i+1],
+        y_history[:final_i+1],
+        exit_time,
+        diffusive_distance[:diffusive_distance_index].copy(),
+        driven_distance[:driven_distance_index].copy(),
+        driven_velocity[:driven_velocity_index].copy(),
+        diffusive_velocity[:diffusive_velocity_index].copy()
+    )
+
 
 def move(config, theta: float = 0.0, stop_on_cell_exit = True):
     """Acts as a wrapper for _move, passing in arguments
@@ -293,9 +317,8 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
     """
 
     x, y, exit_time, dist_trap, distance_driven, vel_driven, vel_trap = _move(
-        config.total_time, config.dt,
-        config.p_driv, config.time_between,
-        config.trap_dist, config.trap_std, theta, stop_on_cell_exit
+        config.total_time, config.dt, trap_dist = config.trap_dist, trap_std=config.trap_std, theta = theta,
+        stop_on_cell_exit = stop_on_cell_exit, p_driv=config.p_driv
     )
 
     return SimulationOutput(
