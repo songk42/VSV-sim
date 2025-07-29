@@ -43,7 +43,7 @@ class SimulationConfig:
     """Configuration for simulation parameters"""
     total_time: int = 2000  # maximum simulation time (s)
     n_particles: int = 1
-    p_driv: float = 1  # probability of driven motion (0.0-1.0) should be 0.03
+    p_driv: float = 0.03  # probability of driven motion (0.0-1.0) should be 0.03
     trap_dist: float = TRAP_DIST  # distance between traps (m)
     trap_std: float = TRAP_STD  # standard deviation of trap distance (m)
     time_between: float = TIME_BETWEEN_STATES
@@ -174,10 +174,12 @@ def _move(total_time, dt,
           trap_dist, trap_std, theta, stop_on_cell_exit,
           p_driv = 0.03, mean_driven_time = 0.6, std_driven_time  = 0.2):
 
+    hop_mean = 1.0; hop_std = 0.3 # Constants so that particle changes traps ~once per second
+    next_hop_time = np.inf       # Initialize hopping as disabled
 
     # Compute matching diffusive‐state distribution
     if p_driv == 0:
-        mean_diffusive = 600
+        mean_diffusive = 1 / dt # Particles move between traps once per second
         std_diffusive  = 0
     else:
         mean_diffusive = mean_driven_time * (1.0 - p_driv) / p_driv
@@ -229,9 +231,11 @@ def _move(total_time, dt,
             if is_driven:
                 driven_distance[driven_distance_index] = dist
                 driven_distance_index += 1
+                next_hop_time = np.inf              # disable hopping
             else:
                 diffusive_distance[diffusive_distance_index] = dist
                 diffusive_distance_index += 1
+                next_hop_time = current_time + truncated_gauss(hop_mean, hop_std)
 
             # Reset state tracking, decide next state
             state_start_index = i - 1
@@ -250,11 +254,7 @@ def _move(total_time, dt,
             next_switch_time = current_time + dur
             reverse_next     = np.random.random() < 0.5  # 50% chance to reverse
 
-            # If just switched to diffusive state, move trap
-            if not is_driven:
-                trap_x, trap_y = calc_new_trap_position(
-                    trap_x, trap_y, trap_dist, trap_std
-                )
+
 
         # Calculate next position based on current state
         if is_driven:
@@ -264,6 +264,14 @@ def _move(total_time, dt,
             # During driven motion, trap follows particle
             trap_x, trap_y = new_x, new_y
         else:
+            # Handle trap changing:
+            if current_time >= next_hop_time:
+                trap_x, trap_y = calc_new_trap_position(
+                    trap_x, trap_y, trap_dist, trap_std
+                )
+                next_hop_time = current_time + truncated_gauss(hop_mean, hop_std)
+
+            # Calc next particle position
             new_x, new_y = calc_diffusive_step(
                 x_history[i-1], y_history[i-1], trap_x, trap_y, dt
             )
