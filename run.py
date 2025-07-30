@@ -1,3 +1,4 @@
+import math
 import sys
 
 import argparse
@@ -5,6 +6,7 @@ import csv
 import numpy as np
 import os
 from PySide6.QtWidgets import QApplication
+from matplotlib.ticker import PercentFormatter
 from tqdm import tqdm
 import simulation as sim
 import visualize as vis
@@ -206,9 +208,11 @@ def main():
     # Run GUI application
     app = QApplication(sys.argv)
 
-    simulation = vis.SimulationVis(config)
-    simulation.show()
-    simulation.run_simulation()
+    # simulation = vis.SimulationVis(config)
+    # simulation.show()
+    # simulation.run_simulation()
+
+    plot_flux_distribution(config)
 
     sys.exit(app.exec())
 
@@ -237,14 +241,102 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.ylabel("Displacement (µm)")
         plt.title(f"Displacement vs. Time for Varying Driven Motion Amounts")
         plt.legend()
-        plt.xlim([0, 1000])
+        plt.xlim([0, math.ceil(total_time / 1000) * 1000]) # Round total time up to the nearest thousand
         plt.ylim([0, 50])
 
         # Show chart
         plt.show()
 
 
+def plot_flux_distribution(config,
+                           snapshot_interval: float = 0.01,
+                           window_duration: int = 4,
+                           diffusive_threshold: float = 2.5e-9):
+    """
+    Plot the distribution of 4‑second flux values in **micrometers** for every particle.
+
+    Parameters
+    ----------
+    config : SimulationConfig
+        Configuration object with simulation parameters (must include n_particles).
+    snapshot_interval : float, optional
+        Time step (s) between snapshots used when calling `compute_flux_4s`.
+    window_duration : int, optional
+        Window (s) over which diffusive flux is computed.
+    diffusive_threshold : float, optional
+        Threshold (m) used to decide whether a step counts toward diffusive flux.
+
+    Notes
+    -----
+    * All flux values returned by the simulation are assumed to be in **meters**.
+      They are converted to **micrometers** (× 1 000 000) before plotting.
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import PercentFormatter
+    from tqdm import tqdm
+
+    import simulation as sim
+    from analysis import compute_flux_4s
+
+    # Accumulate flux values from every particle
+    all_flux_diffusive = []
+    all_flux_driven = []
+
+    for i in tqdm(range(config.n_particles), desc="Calculating 4‑s flux", unit="particle"):
+        theta = 2 * np.pi * i / config.n_particles
+        sim_output = sim.move(config, theta=theta)
+
+        flux_diffusive = compute_flux_4s(sim_output,
+                                         config,
+                                         snapshot_interval,
+                                         window_duration,
+                                         diffusive_threshold)
+        flux_driven = sim_output.distance_driven
+
+        all_flux_diffusive.extend(flux_diffusive)
+        all_flux_driven.extend(flux_driven)
+
+    # ---------- Convert from meters → micrometers ----------
+    all_flux_diffusive_um = np.asarray(all_flux_diffusive) * 1e6  # μm
+    all_flux_driven_um = np.asarray(all_flux_driven) * 1e6        # μm
+
+    # ---------- Histogram settings ----------
+    weights_diffusive = np.ones_like(all_flux_diffusive_um) / len(all_flux_diffusive_um) * 100
+    weights_driven = np.ones_like(all_flux_driven_um) / len(all_flux_driven_um) * 100
+
+    # Remove zeros for log‑spaced bins
+    flux_diffusive_nz = all_flux_diffusive_um[all_flux_diffusive_um > 0]
+    flux_driven_nz = all_flux_driven_um[all_flux_driven_um > 0]
+    all_nz = np.concatenate([flux_diffusive_nz, flux_driven_nz])
+
+    num_bins = 60
+    bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), num_bins)
+
+    # ---------- Plot ----------
+    plt.figure()
+
+    plt.hist(all_flux_diffusive_um, bins=bins, weights=weights_diffusive,
+             color='blue', alpha=0.7, edgecolor='black', label='Diffusive Flux')
+    plt.hist(all_flux_driven_um, bins=bins, weights=weights_driven,
+             color='red',  alpha=0.7, edgecolor='black', label='Driven Flux')
+
+    plt.xscale('log')
+    plt.xlabel(r"Flux ($\mu$m)")
+    plt.ylabel("Percentage")
+    plt.title("Distribution of 4‑Second Flux Values")
+    plt.gca().yaxis.set_major_formatter(PercentFormatter())  # y‑axis in %
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
 
 if __name__ == "__main__":
-    # main()
-    generate_displacement_time_driven_graph(n_particles=50, total_time=1000)
+    main()
+    # generate_displacement_time_driven_graph(n_particles=20, total_time=600)
+    # generate_displacement_time_driven_graph(n_particles=20, total_time=3600)
+
+
+

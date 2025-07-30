@@ -198,4 +198,57 @@ def plot_displacement_vs_time_line(
             # Plot
             plt.plot(t, mean_signed, label=p_driv, color=colors[i])
 
+# python
+def compute_flux_4s(sim_output, config, snapshot_interval=0.01, window_duration=4, diffusive_threshold=5e-9):
+    """
+    Computes the 4-second flux by analyzing the trajectory from the simulation output to compare with
+    flux data from: https://pubmed.ncbi.nlm.nih.gov/32606395/
+
+    The method downsamples the simulation trajectory (assumed to be recorded at every dt)
+    using the specified snapshot_interval. Then it splits the snapshots into windows of duration
+    window_duration and sums the Euclidean displacements between snapshots only if the displacement
+    is below 'diffusive_threshold' (assumed to be diffusive/hop motion).
+
+    Parameters:
+      sim_output: The simulation output object (returned by move) with .x and .y arrays.
+      config: The simulation configuration (to access dt).
+      snapshot_interval: Interval (s) between snapshots.
+      window_duration: Duration (s) of each window over which to sum displacements.
+      diffusive_threshold: Maximum displacement (m) per snapshot that is assumed to be a hop (diffusive).
+
+    Returns:
+      A NumPy array of flux values (total diffusive displacement per 4 s window).
+    """
+    import numpy as np
+
+    dt = config.dt
+    # Determine the number of simulation steps between snapshots.
+    snapshot_step = int(snapshot_interval / dt)
+    if snapshot_step < 1:
+        snapshot_step = 1
+
+    # Downsample trajectory arrays.
+    xs = np.array(sim_output.x)[::snapshot_step]
+    ys = np.array(sim_output.y)[::snapshot_step]
+
+    # Number of snapshots in each window.
+    window_size = int(window_duration / snapshot_interval)
+
+    flux_values = []
+    num_windows = (len(xs) - 1) // window_size
+
+    for w in range(num_windows):
+        flux = 0.0
+        start = w * window_size
+        end   = start + window_size
+        # Sum displacements between snapshots in this window.
+        for i in range(start, end):
+            dx = xs[i+1] - xs[i]
+            dy = ys[i+1] - ys[i]
+            disp = np.hypot(dx, dy)
+            # Only count if displacement is small enough to be considered a hop (diffusive)
+            if disp < diffusive_threshold:
+                flux += disp
+        flux_values.append(flux)
+    return np.array(flux_values)
 
