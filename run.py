@@ -79,6 +79,10 @@ def parse_arguments() -> argparse.Namespace:
         '--headless', action='store_true',
         help='Run simulation without GUI (exports data only)', default=False
     )
+    mode_group.add_argument(
+        '--compute_flux', action='store_true',
+        help='Compute and plot flux distribution for particles', default=False
+    )
 
     # Help and examples
     parser.epilog = """
@@ -203,6 +207,8 @@ def main():
     # Run headless simulation if requested
     if args.headless:
         success = run_headless_simulation(config)
+        if args.compute_flux:
+            plot_flux_distribution(config)
         sys.exit(0 if success else 1)
 
     # Run GUI application
@@ -212,7 +218,8 @@ def main():
     # simulation.show()
     # simulation.run_simulation()
 
-    plot_flux_distribution(config)
+    if args.compute_flux:
+        plot_flux_distribution(config)
 
     sys.exit(app.exec())
 
@@ -312,6 +319,10 @@ def plot_flux_distribution(config,
 
     num_bins = 60
     bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), num_bins)
+
+    # -- Print summary statistics --
+    print(f"Diffusive flux values (μm): mean {np.mean(all_flux_diffusive_um):.4e}, std {np.std(all_flux_diffusive_um):.4e}")
+    print(f"Driven flux values (μm): mean {np.mean(all_flux_driven_um):.4e}, std {np.std(all_flux_driven_um):.4e}")
 
     # ---------- Plot ----------
     plt.figure()
