@@ -7,6 +7,7 @@ from typing import NamedTuple
 import numpy as np
 import random
 from matplotlib import pyplot as plt
+import scipy
 import statistics as st
 from numba import njit
 
@@ -21,11 +22,17 @@ k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
 CELL_RADIUS = 1.502e-5  # radius of cell (m)
 NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
 TRAP_SIZE = 2.4e-7  # size of trap (m)
-TRAP_DIST = 1.7e-7  # distance between traps (m)
-TRAP_STD = 2.1e-7  # standard deviation of trap distance (m)
 TIME_BETWEEN_STATES = 0.03 # 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
+TRAP_DIST_ALPHA = 1.40896797409667
+TRAP_DIST_LOC = 0.04298463673860459
+TRAP_DIST_SCALE = 0.13924626080385946
+TRAP_DIST = scipy.stats.gamma(
+    TRAP_DIST_ALPHA,
+    loc=TRAP_DIST_LOC,
+    scale=TRAP_DIST_SCALE,
+)  # distance between traps (m)
 
 def timing(func):
     @wraps(func)
@@ -44,8 +51,7 @@ class SimulationConfig:
     total_time: int = 2000  # maximum simulation time (s)
     n_particles: int = 1
     p_driv: float = 0.03  # probability of driven motion (0.0-1.0) should be 0.03
-    trap_dist: float = TRAP_DIST  # distance between traps (m)
-    trap_std: float = TRAP_STD  # standard deviation of trap distance (m)
+    trap_dist = TRAP_DIST  # dist of distance between traps (m)
     time_between: float = TIME_BETWEEN_STATES
     dt: float = 0.001  # time step (s)
     dirname: str = "sim"
@@ -61,7 +67,8 @@ class SimulationConfig:
             total_time=args.total_time,
             n_particles=args.n_particles,
             p_driv=args.p_driv,
-            trap_dist=args.trap_dist,
+            # TODO how is one supposed to send a prob dist via command line?
+            # trap_dist=TRAP_DIST if args.trap_dist == "default" else args.trap_dist,
             time_between=args.time_between,
             dt=args.dt,
             dirname=args.dirname,
@@ -81,7 +88,15 @@ class SimulationOutput(NamedTuple):
     velocity_trap: np.ndarray  # velocities during hopping states
 
 
-@njit(cache=True)
+# @njit(cache=True)
+def truncated_dist(dist, low=-np.inf, high=np.inf):
+    """Gaussian sample truncated to [low, high] – numba compatible."""
+    while True:
+        x = dist.rvs()
+        if low <= x <= high:
+            return x
+
+# @njit(cache=True)
 def truncated_gauss(mu, sigma, low=-np.inf, high=np.inf):
     """Gaussian sample truncated to [low, high] – numba compatible."""
     while True:
@@ -89,11 +104,11 @@ def truncated_gauss(mu, sigma, low=-np.inf, high=np.inf):
         if low <= x <= high:
             return x
 
-@njit(cache=True)
+# @njit(cache=True)
 def outside_nucleus(x, y):
     return x * x + y * y > NUCLEUS_RADIUS ** 2
 
-@njit(cache=True)
+# @njit(cache=True)
 def calc_directed_step(current_x, current_y, reverse_direction, dt):
     dr = np.random.normal(MOTOR_PROTEIN_SPEED * dt, MOTOR_PROTEIN_SPEED * dt)
 
@@ -109,7 +124,7 @@ def calc_directed_step(current_x, current_y, reverse_direction, dt):
             return nx, ny
 
 
-@njit(cache=True)
+# @njit(cache=True)
 def calc_diffusive_step(current_x, current_y, trap_x_center, trap_y_center, dt):
     # 1. Restoring‐force (drift) displacement
     displacement_from_center_x = current_x - trap_x_center
@@ -146,11 +161,16 @@ def calc_diffusive_step(current_x, current_y, trap_x_center, trap_y_center, dt):
         if outside_nucleus(next_x, next_y):
             return next_x, next_y
 
-@njit(cache=True)
-def calc_new_trap_position(trap_x, trap_y, trap_dist, trap_std):
+# @njit(cache=True)
+def calc_new_trap_position(trap_x, trap_y, trap_dist):
     while True:
         # 1. calculate random direction and distance
-        r = truncated_gauss(trap_dist, trap_std, 0.0, np.inf)
+        ### truncated gauss: ###
+        # while True:
+        # x = np.random.normal(mu, sigma)
+        # if low <= x <= high:
+        #     return x
+        r = truncated_dist(trap_dist, 0.0, np.inf)
         theta = np.random.uniform(0.0, 2.0 * np.pi)
 
         # 2. propose new center coordinates
@@ -161,7 +181,7 @@ def calc_new_trap_position(trap_x, trap_y, trap_dist, trap_std):
         if outside_nucleus(new_trap_x, new_trap_y):
             return new_trap_x, new_trap_y
 
-@njit(cache=True)
+# @njit(cache=True)
 def generate_state_duration(time_between_state_changes):
     while True:
         dur = np.random.normal(time_between_state_changes, time_between_state_changes)
@@ -169,9 +189,9 @@ def generate_state_duration(time_between_state_changes):
         if dur > 0.0:
             return dur
 
-@njit(cache=True)
+# @njit(cache=True)
 def _move(total_time, dt,
-          trap_dist, trap_std, theta, stop_on_cell_exit,
+          trap_dist, theta, stop_on_cell_exit,
           p_driv = 0.03, mean_driven_time = 0.6, std_driven_time  = 0.2):
 
     hop_mean = 1.0; hop_std = 0.3 # Constants so that particle changes traps ~once per second
@@ -267,7 +287,7 @@ def _move(total_time, dt,
             # Handle trap changing:
             if current_time >= next_hop_time:
                 trap_x, trap_y = calc_new_trap_position(
-                    trap_x, trap_y, trap_dist, trap_std
+                    trap_x, trap_y, trap_dist,
                 )
                 next_hop_time = current_time + truncated_gauss(hop_mean, hop_std)
 
@@ -325,8 +345,12 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
     """
 
     x, y, exit_time, dist_trap, distance_driven, vel_driven, vel_trap = _move(
-        config.total_time, config.dt, trap_dist = config.trap_dist, trap_std=config.trap_std, theta = theta,
-        stop_on_cell_exit = stop_on_cell_exit, p_driv=config.p_driv
+        config.total_time,
+        config.dt,
+        trap_dist = config.trap_dist,
+        theta = theta,
+        stop_on_cell_exit = stop_on_cell_exit,
+        p_driv=config.p_driv,
     )
 
     return SimulationOutput(

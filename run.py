@@ -35,12 +35,8 @@ def parse_arguments() -> argparse.Namespace:
         help='Probability of driven motion (0.0-1.0)'
     )
     sim_group.add_argument(
-        '--trap_dist', type=float, default=sim.TRAP_DIST,
+        '--trap_dist', type=str, default="default",
         help=f'Distance between traps (meters) (default: {sim.TRAP_DIST})'
-    )
-    sim_group.add_argument(
-        '--trap_std', type=float, default=sim.TRAP_STD,
-        help=f'Standard deviation of trap distance (meters) (default: {sim.TRAP_STD})'
     )
     sim_group.add_argument(
         '--time_between', type=float, default=sim.TIME_BETWEEN_STATES,
@@ -114,8 +110,8 @@ def validate_arguments(args: argparse.Namespace) -> bool:
         errors.append("width and height must be positive")
 
     # Validate optional parameters
-    if args.trap_dist is not None and args.trap_dist <= 0:
-        errors.append("trap_dist must be positive")
+    # if args.trap_dist is not None and args.trap_dist <= 0:
+    #     errors.append("trap_dist must be positive")
     if args.time_between is not None and args.time_between <= 0:
         errors.append("time_between must be positive")
 
