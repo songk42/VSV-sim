@@ -11,6 +11,8 @@ from tqdm import tqdm
 import simulation as sim
 import visualize as vis
 from analysis import plot_displacement_vs_time_line
+# at top
+from simulation import D
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -251,7 +253,7 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
 def plot_flux_distribution(config,
                            snapshot_interval: float = 0.01,
                            window_duration: int = 4,
-                           diffusive_threshold: float = 2.5e-9):
+                           diffusive_threshold: float = None):
     """
     Plot the distribution of 4‑second flux values in **micrometers** for every particle.
 
@@ -278,6 +280,10 @@ def plot_flux_distribution(config,
 
     import simulation as sim
     from analysis import compute_flux_4s
+
+    if diffusive_threshold is None:
+        sigma = (2*D*snapshot_interval)**0.5
+        diffusive_threshold = 0.4 * sigma   # ≈ 3.8e-8 m at 10 ms
 
     # Accumulate flux values from every particle
     all_flux_diffusive = []
@@ -324,7 +330,7 @@ def plot_flux_distribution(config,
     plt.xscale('log')
     plt.xlabel(r"Flux ($\mu$m)")
     plt.ylabel("Percentage")
-    plt.title("Distribution of 4‑Second Flux Values")
+    plt.title("Distribution of 4‑Second Flux Values over " + str(config.n_particles) + " particles")
     plt.gca().yaxis.set_major_formatter(PercentFormatter())  # y‑axis in %
     plt.grid(True)
     plt.legend()
