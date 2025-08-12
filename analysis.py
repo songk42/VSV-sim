@@ -208,21 +208,32 @@ def compute_flux_4s(
         sample_dt: float = 0.01,
         rate: bool = True,
         return_mask: bool = False,
-        fraction_weighting: bool = True,
         driven_fraction: float = 0.0368,  # 3.68% time in driven state
 ):
     """
-    Trap-aware 4-s distances/rates with optional paper-style fraction weighting.
+    Computes the 4-second flux by analyzing the trajectory from the simulation output to compare with
+    flux data from: https://pubmed.ncbi.nlm.nih.gov/32606395/
 
-    - DRIVEN window (any driven frames): driven = end-to-end over window; diffusive = 0
-    - DIFFUSIVE-only window: diffusive = sum of center-to-center hop distances whose
-      hop times fall inside the window; driven = 0
-    - If fraction_weighting=True: multiply distances for each state by the global
-      fraction of time in that state (driven_fraction, 1-driven_fraction) to match paper.
+    The method downsamples the simulation trajectory (assumed to be recorded at every dt)
+    using the specified snapshot_interval. Then it splits the snapshots into windows of duration
+    window_duration and sums the Euclidean displacements between snapshots only if the displacement
+    is below 'diffusive_threshold' (assumed to be diffusive/hop motion).
+
+    Then, flux of driven or diffusive states are weighted based on % of tracks with the respective state
+
+    Parameters:
+      sim_output: The simulation output object (returned by move) with .x and .y arrays.
+      config: The simulation configuration (to access dt).
+      snapshot_interval: Interval (s) between snapshots.
+      window_duration: Duration (s) of each window over which to sum displacements.
+      diffusive_threshold: Maximum displacement (m) per snapshot that is assumed to be a hop (diffusive).
+
+    Returns:
+      A NumPy array of flux values (total diffusive displacement per 4 s window).
     """
     import numpy as np
 
-    # --- 0.01 s sampling grid + states (reuse your existing logic) ---
+    # --- 0.01 s sampling grid + states ---
     t_end = (len(sim_output.x) - 1) * cfg.dt
     if hasattr(sim_output, "t_01s") and hasattr(sim_output, "state_01s") and abs(sample_dt - 0.01) < 1e-12:
         t_samples  = sim_output.t_01s
@@ -293,11 +304,6 @@ def compute_flux_4s(
         if rate:
             d_diff /= window
             d_driv /= window
-
-        # Apple weighting per state --y
-        if fraction_weighting:
-            d_diff *= diff_weight
-            d_driv *= driv_weight
 
         diff_flux[w] = d_diff
         driv_flux[w] = d_driv

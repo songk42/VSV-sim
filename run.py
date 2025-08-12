@@ -10,9 +10,7 @@ from matplotlib.ticker import PercentFormatter
 from tqdm import tqdm
 import simulation as sim
 import visualize as vis
-from analysis import plot_displacement_vs_time_line, compute_flux_4s
-# at top
-from simulation import D
+from analysis import plot_displacement_vs_time_line
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -37,12 +35,8 @@ def parse_arguments() -> argparse.Namespace:
         help='Probability of driven motion (0.0-1.0)'
     )
     sim_group.add_argument(
-        '--trap_dist', type=float, default=sim.TRAP_DIST,
+        '--trap_dist', type=str, default="default",
         help=f'Distance between traps (meters) (default: {sim.TRAP_DIST})'
-    )
-    sim_group.add_argument(
-        '--trap_std', type=float, default=sim.TRAP_STD,
-        help=f'Standard deviation of trap distance (meters) (default: {sim.TRAP_STD})'
     )
     sim_group.add_argument(
         '--time_between', type=float, default=sim.TIME_BETWEEN_STATES,
@@ -81,6 +75,10 @@ def parse_arguments() -> argparse.Namespace:
         '--headless', action='store_true',
         help='Run simulation without GUI (exports data only)', default=False
     )
+    mode_group.add_argument(
+        '--compute_flux', action='store_true',
+        help='Compute and plot flux distribution for particles', default=False
+    )
 
     # Help and examples
     parser.epilog = """
@@ -112,8 +110,8 @@ def validate_arguments(args: argparse.Namespace) -> bool:
         errors.append("width and height must be positive")
 
     # Validate optional parameters
-    if args.trap_dist is not None and args.trap_dist <= 0:
-        errors.append("trap_dist must be positive")
+    # if args.trap_dist is not None and args.trap_dist <= 0:
+    #     errors.append("trap_dist must be positive")
     if args.time_between is not None and args.time_between <= 0:
         errors.append("time_between must be positive")
 
@@ -205,6 +203,8 @@ def main():
     # Run headless simulation if requested
     if args.headless:
         success = run_headless_simulation(config)
+        if args.compute_flux:
+            plot_flux_distribution(config)
         sys.exit(0 if success else 1)
 
     # Run GUI application
@@ -214,7 +214,8 @@ def main():
     # simulation.show()
     # simulation.run_simulation()
 
-    plot_flux_distribution(config)
+    if args.compute_flux:
+        plot_flux_distribution(config)
 
     sys.exit(app.exec())
 
@@ -250,12 +251,25 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.show()
 
 
-# run.py (or wherever plot_flux_distribution lives)
-
-def plot_flux_distribution(config,
-                           window_duration: int = 4):
+def plot_flux_distribution(config,window_duration: int = 4):
     """
-    Plot 4-s distance distributions (μm per 4 s), weighting flux by % of tracks with behavior
+    Plot the distribution of 4‑second flux values in **micrometers** for every particle.
+
+    Parameters
+    ----------
+    config : SimulationConfig
+        Configuration object with simulation parameters (must include n_particles).
+    snapshot_interval : float, optional
+        Time step (s) between snapshots used when calling `compute_flux_4s`.
+    window_duration : int, optional
+        Window (s) over which diffusive flux is computed.
+    diffusive_threshold : float, optional
+        Threshold (m) used to decide whether a step counts toward diffusive flux.
+
+    Notes
+    -----
+    * All flux values returned by the simulation are assumed to be in **meters**.
+      They are converted to **micrometers** (× 1 000 000) before plotting.
     """
     import numpy as np
     import matplotlib.pyplot as plt
@@ -265,6 +279,7 @@ def plot_flux_distribution(config,
     import simulation as sim
     from analysis import compute_flux_4s
 
+    # Accumulate flux values from every particle
     all_dist_diffusive = []
     all_dist_driven = []
     total_windows = 0
@@ -275,12 +290,11 @@ def plot_flux_distribution(config,
         theta = 2 * np.pi * i / config.n_particles
         sim_output = sim.move(config, theta=theta, stop_on_cell_exit=False)
 
-        # IMPORTANT: no weighting inside; get raw meters PER WINDOW
+        # get raw meters per window
         diff_d, driv_d, mask = compute_flux_4s(
             sim_output, config,
             window=window_duration, sample_dt=0.01,
-            rate=False, return_mask=True,
-            fraction_weighting=False  # ensure raw distances
+            rate=False, return_mask=True
         )
 
         all_dist_diffusive.extend(diff_d)
