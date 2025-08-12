@@ -79,6 +79,12 @@ class SimulationOutput(NamedTuple):
     distance_driven: np.ndarray  # distances traveled during driven states
     velocity_driven: np.ndarray  # velocities during driven states
     velocity_trap: np.ndarray  # velocities during hopping states
+    state_dt: np.ndarray          # bool per *dt* step (len == len(x))
+    t_01s: np.ndarray             # times sampled every 0.01 s (seconds)
+    state_01s: np.ndarray         # bool per 0.01 s frame (len == len(t_01s))
+    hop_t: np.ndarray
+    hop_x: np.ndarray
+    hop_y: np.ndarray
 
 
 @njit(cache=True)
@@ -189,7 +195,14 @@ def _move(total_time, dt,
     max_states = int(total_time / dt) + 1
     x_history  = np.empty(max_states, dtype=np.float64)
     y_history  = np.empty(max_states, dtype=np.float64)
+    state_hist = np.empty(max_states, dtype=np.bool_)
     final_i    = max_states - 1
+
+    # Buffers to store trap centers for analysis
+    hop_time_idx = np.empty(max_states, dtype=np.int64)
+    hop_pos_x    = np.empty(max_states, dtype=np.float64)
+    hop_pos_y    = np.empty(max_states, dtype=np.float64)
+    hop_count    = 0
 
     # Initialize fixed-size numpy buffers
     diffusive_distance  = np.empty(max_states, dtype=np.float64)
@@ -208,18 +221,28 @@ def _move(total_time, dt,
     x_history[0] = trap_x = start_radius * np.cos(theta)
     y_history[0] = trap_y = start_radius * np.sin(theta)
 
+    # Record the initial trap as the first "center"
+    hop_time_idx[0] = 0
+    hop_pos_x[0]    = trap_x
+    hop_pos_y[0]    = trap_y
+    hop_count       = 1
+
     # Generate state schedule on the fly
     is_driven = np.random.random() < p_driv
+    state_hist[0] = is_driven
     if is_driven:
         next_switch_time = truncated_gauss(mean_driven_time, std_driven_time)
     else:
         next_switch_time = truncated_gauss(mean_diffusive, std_diffusive)
+
+    next_hop_time = np.inf if is_driven else truncated_gauss(hop_mean, hop_std)
     state_start_index = 0
     reverse_next      = False
     exit_time         = -1.0
 
     # MAIN SIMULATION LOOP
     for i in range(1, max_states):
+        state_hist[i] = is_driven
         current_time = i * dt
 
         # Check for state change
@@ -241,6 +264,12 @@ def _move(total_time, dt,
             state_start_index = i - 1
             was_driven        = is_driven
             is_driven         = not was_driven
+
+            # schedule hopping for the state we just entered
+            if is_driven:
+                next_hop_time = np.inf                         # disable hopping while driven
+            else:
+                next_hop_time = current_time + truncated_gauss(hop_mean, hop_std)
 
             # Log transition
             # print(f"{current_time}s: Just switched from "
@@ -271,6 +300,12 @@ def _move(total_time, dt,
                 )
                 next_hop_time = current_time + truncated_gauss(hop_mean, hop_std)
 
+                # record trap center for analysis
+                hop_time_idx[hop_count] = i
+                hop_pos_x[hop_count]    = trap_x
+                hop_pos_y[hop_count]    = trap_y
+                hop_count += 1
+
             # Calc next particle position
             new_x, new_y = calc_diffusive_step(
                 x_history[i-1], y_history[i-1], trap_x, trap_y, dt
@@ -297,6 +332,7 @@ def _move(total_time, dt,
             if stop_on_cell_exit:
                 break
 
+
     # Return trimmed arrays
     return (
         x_history[:final_i+1],
@@ -305,7 +341,11 @@ def _move(total_time, dt,
         diffusive_distance[:diffusive_distance_index].copy(),
         driven_distance[:driven_distance_index].copy(),
         driven_velocity[:driven_velocity_index].copy(),
-        diffusive_velocity[:diffusive_velocity_index].copy()
+        diffusive_velocity[:diffusive_velocity_index].copy(),
+        state_hist[:final_i+1],
+        hop_time_idx[:hop_count].copy(),
+        hop_pos_x[:hop_count].copy(),
+        hop_pos_y[:hop_count].copy(),
     )
 
 
@@ -324,10 +364,21 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
             velocity_trap (list): Velocities during hopping states
     """
 
-    x, y, exit_time, dist_trap, distance_driven, vel_driven, vel_trap = _move(
-        config.total_time, config.dt, trap_dist = config.trap_dist, trap_std=config.trap_std, theta = theta,
-        stop_on_cell_exit = stop_on_cell_exit, p_driv=config.p_driv
+    x, y, exit_time, dist_trap, distance_driven, vel_driven, vel_trap, state_dt, \
+        hop_idx, hop_x, hop_y = _move(
+        config.total_time, config.dt,
+        trap_dist=config.trap_dist, trap_std=config.trap_std,
+        theta=theta, stop_on_cell_exit=stop_on_cell_exit, p_driv=config.p_driv
     )
+
+    # Build 0.01 s (100 Hz) state track
+    t_end = (len(x) - 1) * config.dt
+    t_01s = np.round(np.arange(0.0, t_end + 1e-12, 0.01), 2)
+    idx = np.minimum((t_01s / config.dt).astype(np.int64), len(state_dt) - 1)
+    state_01s = state_dt[idx]
+
+    # Convert hop indices to seconds
+    hop_t = hop_idx.astype(np.float64) * config.dt
 
     return SimulationOutput(
         x=np.array(x),
@@ -336,7 +387,13 @@ def move(config, theta: float = 0.0, stop_on_cell_exit = True):
         distance_trap=np.array(dist_trap),
         distance_driven=np.array(distance_driven),
         velocity_driven=np.array(vel_driven),
-        velocity_trap=np.array(vel_trap)
+        velocity_trap=np.array(vel_trap),
+        state_dt=np.array(state_dt),
+        t_01s=t_01s,
+        state_01s=state_01s,
+        hop_t=hop_t,
+        hop_x=hop_x,
+        hop_y=hop_y,
     )
 
 def graph(

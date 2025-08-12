@@ -199,56 +199,207 @@ def plot_displacement_vs_time_line(
             plt.plot(t, mean_signed, label=p_driv, color=colors[i])
 
 # python
-def compute_flux_4s(sim_output, config, snapshot_interval=0.01, window_duration=4, diffusive_threshold=5e-9):
+# core/sim_new/analysis.py
+import numpy as np
+
+# analysis.py
+
+import numpy as np
+
+def compute_flux_4s(
+        sim_output,
+        cfg,
+        window: float = 4.0,
+        *,
+        sample_dt: float = 0.01,
+        rate: bool = True,
+        use_e2e_for_any_driven: bool = True,
+        return_mask: bool = False,
+):
     """
-    Computes the 4-second flux by analyzing the trajectory from the simulation output to compare with
-    flux data from: https://pubmed.ncbi.nlm.nih.gov/32606395/
+    Compute diffusive/driven flux per non-overlapping 'window' seconds on a fixed sample grid.
 
-    The method downsamples the simulation trajectory (assumed to be recorded at every dt)
-    using the specified snapshot_interval. Then it splits the snapshots into windows of duration
-    window_duration and sums the Euclidean displacements between snapshots only if the displacement
-    is below 'diffusive_threshold' (assumed to be diffusive/hop motion).
-
-    Parameters:
-      sim_output: The simulation output object (returned by move) with .x and .y arrays.
-      config: The simulation configuration (to access dt).
-      snapshot_interval: Interval (s) between snapshots.
-      window_duration: Duration (s) of each window over which to sum displacements.
-      diffusive_threshold: Maximum displacement (m) per snapshot that is assumed to be a hop (diffusive).
+    Window classification:
+      • If a window contains ANY driven frames -> classify as DRIVEN and (if use_e2e_for_any_driven)
+        use END-TO-END distance over the whole window for the driven contribution; diffusive=0.
+      • Otherwise (all frames diffusive) -> classify as DIFFUSIVE and sum path-length within the window.
 
     Returns:
-      A NumPy array of flux values (total diffusive displacement per 4 s window).
+      diff_flux, driv_flux   (m/s if rate=True, else meters per window)
+      If return_mask=True, also returns driven_window_mask (bool array, len = n_windows).
+    """
+    # --- build 0.01 s time grid and state ---
+    t_end = (len(sim_output.x) - 1) * cfg.dt
+
+    if (hasattr(sim_output, "t_01s") and hasattr(sim_output, "state_01s")
+            and abs(sample_dt - 0.01) < 1e-12):
+        t_samples  = sim_output.t_01s
+        state_samp = sim_output.state_01s.astype(bool)
+        keep = t_samples <= t_end + 1e-12
+        t_samples  = t_samples[keep]
+        state_samp = state_samp[keep]
+    else:
+        t_samples = np.round(np.arange(0.0, t_end + 1e-12, sample_dt), 2)
+        if hasattr(sim_output, "state_dt"):
+            idx = np.minimum((t_samples / cfg.dt).astype(np.int64), len(sim_output.state_dt) - 1)
+            state_samp = sim_output.state_dt[idx].astype(bool)
+        else:
+            raise ValueError("No state track available. Return state_dt or (t_01s,state_01s) from move().")
+
+    # --- sample positions onto same grid ---
+    t_orig = np.arange(len(sim_output.x)) * cfg.dt
+    x_samp = np.interp(t_samples, t_orig, sim_output.x)
+    y_samp = np.interp(t_samples, t_orig, sim_output.y)
+
+    # --- windowing ---
+    pts_per_win = int(round(window / sample_dt))
+    n_windows   = (len(t_samples) - 1) // pts_per_win  # need at least one step per window
+
+    diff_flux = np.zeros(n_windows, dtype=float)
+    driv_flux = np.zeros(n_windows, dtype=float)
+    driven_mask = np.zeros(n_windows, dtype=bool)
+
+    for w in range(n_windows):
+        s = w * pts_per_win
+        e = s + pts_per_win
+        seg_state = state_samp[s:e]                 # states for the steps in the window (length pts_per_win)
+        has_driven = bool(seg_state.any())
+        driven_mask[w] = has_driven
+
+        if has_driven and use_e2e_for_any_driven:
+            # END-TO-END distance over the entire window
+            dx = x_samp[e] - x_samp[s]
+            dy = y_samp[e] - y_samp[s]
+            d_driv = float(np.hypot(dx, dy))
+            d_diff = 0.0
+        else:
+            # Path-length sum of steps; attribute all steps to diffusive if no driven present
+            step_dists = np.hypot(np.diff(x_samp[s:e+1]), np.diff(y_samp[s:e+1]))
+            if has_driven:
+                # If not using E2E, split by state (legacy behavior)
+                d_diff = step_dists[~seg_state].sum()
+                d_driv = step_dists[ seg_state].sum()
+            else:
+                d_diff = step_dists.sum()
+                d_driv = 0.0
+
+        if rate:
+            d_diff /= window
+            d_driv /= window
+
+        diff_flux[w] = d_diff
+        driv_flux[w] = d_driv
+
+    if return_mask:
+        return diff_flux, driv_flux, driven_mask
+    return diff_flux, driv_flux
+
+# ----- analysis.py -----
+import numpy as np
+
+def compute_flux_4s_trapaware(
+        sim_output,
+        cfg,
+        window: float = 4.0,
+        *,
+        sample_dt: float = 0.01,
+        rate: bool = True,
+        return_mask: bool = False,
+        # NEW: paper-style weighting
+        fraction_weighting: bool = True,
+        driven_fraction: float = 0.0368,  # 3.68% time in driven state
+):
+    """
+    Trap-aware 4-s distances/rates with optional paper-style fraction weighting.
+
+    - DRIVEN window (any driven frames): driven = end-to-end over window; diffusive = 0
+    - DIFFUSIVE-only window: diffusive = sum of center-to-center hop distances whose
+      hop times fall inside the window; driven = 0
+    - If fraction_weighting=True: multiply distances for each state by the global
+      fraction of time in that state (driven_fraction, 1-driven_fraction) to match paper.
     """
     import numpy as np
 
-    dt = config.dt
-    # Determine the number of simulation steps between snapshots.
-    snapshot_step = int(snapshot_interval / dt)
-    if snapshot_step < 1:
-        snapshot_step = 1
+    # --- 0.01 s sampling grid + states (reuse your existing logic) ---
+    t_end = (len(sim_output.x) - 1) * cfg.dt
+    if hasattr(sim_output, "t_01s") and hasattr(sim_output, "state_01s") and abs(sample_dt - 0.01) < 1e-12:
+        t_samples  = sim_output.t_01s
+        state_samp = sim_output.state_01s.astype(bool)
+        keep = t_samples <= t_end + 1e-12
+        t_samples  = t_samples[keep]
+        state_samp = state_samp[keep]
+    else:
+        t_samples = np.round(np.arange(0.0, t_end + 1e-12, sample_dt), 2)
+        idx = np.minimum((t_samples / cfg.dt).astype(np.int64), len(sim_output.state_dt) - 1)
+        state_samp = sim_output.state_dt[idx].astype(bool)
 
-    # Downsample trajectory arrays.
-    xs = np.array(sim_output.x)[::snapshot_step]
-    ys = np.array(sim_output.y)[::snapshot_step]
+    # sample positions at same grid
+    t_orig = np.arange(len(sim_output.x)) * cfg.dt
+    x_samp = np.interp(t_samples, t_orig, sim_output.x)
+    y_samp = np.interp(t_samples, t_orig, sim_output.y)
 
-    # Number of snapshots in each window.
-    window_size = int(window_duration / snapshot_interval)
+    # --- windows by index and by time ---
+    pts_per_win = int(round(window / sample_dt))
+    n_windows   = (len(t_samples) - 1) // pts_per_win  # need at least one step per window
 
-    flux_values = []
-    num_windows = (len(xs) - 1) // window_size
+    diff_flux  = np.zeros(n_windows, dtype=float)
+    driv_flux  = np.zeros(n_windows, dtype=float)
+    driven_msk = np.zeros(n_windows, dtype=bool)
 
-    for w in range(num_windows):
-        flux = 0.0
-        start = w * window_size
-        end   = start + window_size
-        # Sum displacements between snapshots in this window.
-        for i in range(start, end):
-            dx = xs[i+1] - xs[i]
-            dy = ys[i+1] - ys[i]
-            disp = np.hypot(dx, dy)
-            # Only count if displacement is small enough to be considered a hop (diffusive)
-            if disp < diffusive_threshold:
-                flux += disp
-        flux_values.append(flux)
-    return np.array(flux_values)
+    # hop event data (times in seconds, centers in meters)
+    if not (hasattr(sim_output, "hop_t") and hasattr(sim_output, "hop_x") and hasattr(sim_output, "hop_y")):
+        raise ValueError("SimulationOutput must include hop_t/hop_x/hop_y for trap-aware flux.")
+
+    hop_t = np.asarray(sim_output.hop_t)
+    hop_x = np.asarray(sim_output.hop_x)
+    hop_y = np.asarray(sim_output.hop_y)
+
+    diff_weight  = 1.0 - driven_fraction
+    driv_weight  = driven_fraction
+
+    for w in range(n_windows):
+        s_idx = w * pts_per_win
+        e_idx = s_idx + pts_per_win
+        t_s   = t_samples[s_idx]
+        t_e   = t_samples[e_idx]
+
+        seg_state = state_samp[s_idx:e_idx]
+        any_driv  = bool(seg_state.any())
+        driven_msk[w] = any_driv
+
+        if any_driv:
+            # driven = end-to-end over the window (Holzwarth-style)
+            dx = x_samp[e_idx] - x_samp[s_idx]
+            dy = y_samp[e_idx] - y_samp[s_idx]
+            d_driv = float(np.hypot(dx, dy))
+            d_diff = 0.0
+        else:
+            # diffusive = sum of center-to-center distances for hops within (t_s, t_e]
+            sel = np.where((hop_t > t_s) & (hop_t <= t_e))[0]
+            d_driv = 0.0
+            if sel.size == 0:
+                d_diff = 0.0
+            else:
+                j_prev = sel - 1
+                j_prev = j_prev[j_prev >= 0]
+                sel    = sel[:len(j_prev)]
+                dx = hop_x[sel] - hop_x[j_prev]
+                dy = hop_y[sel] - hop_y[j_prev]
+                d_diff = float(np.sum(np.hypot(dx, dy)))
+
+        # convert to rate if requested
+        if rate:
+            d_diff /= window
+            d_driv /= window
+
+        # --- NEW: apply paper-style time-fraction weighting per state ---
+        if fraction_weighting:
+            d_diff *= diff_weight
+            d_driv *= driv_weight
+
+        diff_flux[w] = d_diff
+        driv_flux[w] = d_driv
+
+    return (diff_flux, driv_flux, driven_msk) if return_mask else (diff_flux, driv_flux)
+
 

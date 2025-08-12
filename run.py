@@ -10,7 +10,7 @@ from matplotlib.ticker import PercentFormatter
 from tqdm import tqdm
 import simulation as sim
 import visualize as vis
-from analysis import plot_displacement_vs_time_line
+from analysis import plot_displacement_vs_time_line, compute_flux_4s_trapaware
 # at top
 from simulation import D
 
@@ -250,28 +250,14 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.show()
 
 
+# run.py (or wherever plot_flux_distribution lives)
+
 def plot_flux_distribution(config,
                            snapshot_interval: float = 0.01,
                            window_duration: int = 4,
                            diffusive_threshold: float = None):
     """
-    Plot the distribution of 4‑second flux values in **micrometers** for every particle.
-
-    Parameters
-    ----------
-    config : SimulationConfig
-        Configuration object with simulation parameters (must include n_particles).
-    snapshot_interval : float, optional
-        Time step (s) between snapshots used when calling `compute_flux_4s`.
-    window_duration : int, optional
-        Window (s) over which diffusive flux is computed.
-    diffusive_threshold : float, optional
-        Threshold (m) used to decide whether a step counts toward diffusive flux.
-
-    Notes
-    -----
-    * All flux values returned by the simulation are assumed to be in **meters**.
-      They are converted to **micrometers** (× 1 000 000) before plotting.
+    Plot 4-s distance distributions (μm per 4 s) and print % of 4-s windows that contain ANY driven motion.
     """
     import numpy as np
     import matplotlib.pyplot as plt
@@ -279,63 +265,69 @@ def plot_flux_distribution(config,
     from tqdm import tqdm
 
     import simulation as sim
-    from analysis import compute_flux_4s
+    from analysis import compute_flux_4s_trapaware
 
-    if diffusive_threshold is None:
-        sigma = (2*D*snapshot_interval)**0.5
-        diffusive_threshold = 0.4 * sigma   # ≈ 3.8e-8 m at 10 ms
+    all_dist_diffusive = []
+    all_dist_driven = []
+    total_windows = 0
+    total_driven_windows = 0
 
-    # Accumulate flux values from every particle
-    all_flux_diffusive = []
-    all_flux_driven = []
-
-    for i in tqdm(range(config.n_particles), desc="Calculating 4‑s flux", unit="particle"):
+    for i in tqdm(range(config.n_particles), desc="Calculating 4-s distances", unit="particle"):
         theta = 2 * np.pi * i / config.n_particles
-        sim_output = sim.move(config, theta=theta)
+        sim_output = sim.move(config, theta=theta, stop_on_cell_exit=False)
 
-        flux_diffusive = compute_flux_4s(sim_output,
-                                         config,
-                                         snapshot_interval,
-                                         window_duration,
-                                         diffusive_threshold)
-        flux_driven = sim_output.distance_driven
+        # NOTE: rate=False -> returns meters PER WINDOW (here, per 4 s), not m/s
+        diff_d, driv_d, mask = compute_flux_4s_trapaware(
+            sim_output, config, window=window_duration, sample_dt=0.01, rate=False, return_mask=True
+        )
+        all_dist_diffusive.extend(diff_d)
+        all_dist_driven.extend(driv_d)
+        total_windows += len(mask)
+        total_driven_windows += int(mask.sum())
 
-        all_flux_diffusive.extend(flux_diffusive)
-        all_flux_driven.extend(flux_driven)
+    # ---- print % of 4-s tracks with any driven motion ----
+    if total_windows > 0:
+        pct_driven = 100.0 * total_driven_windows / total_windows
+        print(f"\n4-s tracks with ANY driven motion: {pct_driven:.2f}%  "
+              f"({total_driven_windows}/{total_windows} windows)")
+    else:
+        print("\nNo 4-s windows found.")
 
-    # ---------- Convert from meters → micrometers ----------
-    all_flux_diffusive_um = np.asarray(all_flux_diffusive) * 1e6  # μm
-    all_flux_driven_um = np.asarray(all_flux_driven) * 1e6        # μm
+    # Convert meters -> micrometers
+    all_dist_diffusive_um = np.asarray(all_dist_diffusive) * 1e6
+    all_dist_driven_um    = np.asarray(all_dist_driven)   * 1e6
 
-    # ---------- Histogram settings ----------
-    weights_diffusive = np.ones_like(all_flux_diffusive_um) / len(all_flux_diffusive_um) * 100
-    weights_driven = np.ones_like(all_flux_driven_um) / len(all_flux_driven_um) * 100
+    # Non-zero subsets (avoid log(0) bins)
+    dist_diffusive_nz = all_dist_diffusive_um[all_dist_diffusive_um > 0]
+    dist_driven_nz    = all_dist_driven_um[all_dist_driven_um > 0]
 
-    # Remove zeros for log‑spaced bins
-    flux_diffusive_nz = all_flux_diffusive_um[all_flux_diffusive_um > 0]
-    flux_driven_nz = all_flux_driven_um[all_flux_driven_um > 0]
-    all_nz = np.concatenate([flux_diffusive_nz, flux_driven_nz])
+    if dist_diffusive_nz.size == 0 and dist_driven_nz.size == 0:
+        print("Warning: No non-zero distances found. Skipping histogram plot.")
+        return
 
-    num_bins = 60
-    bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), num_bins)
+    all_nz = np.concatenate([a for a in (dist_diffusive_nz, dist_driven_nz) if a.size])
+    bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), 60)
 
-    # ---------- Plot ----------
     plt.figure()
+    if dist_diffusive_nz.size:
+        w = np.ones_like(dist_diffusive_nz) / dist_diffusive_nz.size * 100
+        plt.hist(dist_diffusive_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black', label='Diffusive (per 4 s)')
 
-    plt.hist(all_flux_diffusive_um, bins=bins, weights=weights_diffusive,
-             color='blue', alpha=0.7, edgecolor='black', label='Diffusive Flux')
-    plt.hist(all_flux_driven_um, bins=bins, weights=weights_driven,
-             color='red',  alpha=0.7, edgecolor='black', label='Driven Flux')
+    if dist_driven_nz.size:
+        w = np.ones_like(dist_driven_nz) / dist_driven_nz.size * 100
+        plt.hist(dist_driven_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black', label='Driven (per 4 s)')
 
     plt.xscale('log')
-    plt.xlabel(r"Flux ($\mu$m)")
+    plt.xlabel(r"Distance per 4-s window ($\mu$m)")
     plt.ylabel("Percentage")
-    plt.title("Distribution of 4‑Second Flux Values over " + str(config.n_particles) + " particles")
-    plt.gca().yaxis.set_major_formatter(PercentFormatter())  # y‑axis in %
+    plt.title(f"Distribution of 4-Second Distances over {config.n_particles} particles")
+    plt.gca().yaxis.set_major_formatter(PercentFormatter())
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+
 
 
 
