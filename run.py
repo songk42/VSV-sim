@@ -253,11 +253,9 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
 # run.py (or wherever plot_flux_distribution lives)
 
 def plot_flux_distribution(config,
-                           snapshot_interval: float = 0.01,
-                           window_duration: int = 4,
-                           diffusive_threshold: float = None):
+                           window_duration: int = 4):
     """
-    Plot 4-s distance distributions (μm per 4 s) and print % of 4-s windows that contain ANY driven motion.
+    Plot 4-s distance distributions (μm per 4 s), weighting flux by % of tracks with behavior
     """
     import numpy as np
     import matplotlib.pyplot as plt
@@ -272,60 +270,82 @@ def plot_flux_distribution(config,
     total_windows = 0
     total_driven_windows = 0
 
+    # ---- collect raw (unweighted) per-window distances ----
     for i in tqdm(range(config.n_particles), desc="Calculating 4-s distances", unit="particle"):
         theta = 2 * np.pi * i / config.n_particles
         sim_output = sim.move(config, theta=theta, stop_on_cell_exit=False)
 
-        # NOTE: rate=False -> returns meters PER WINDOW (here, per 4 s), not m/s
+        # IMPORTANT: no weighting inside; get raw meters PER WINDOW
         diff_d, driv_d, mask = compute_flux_4s_trapaware(
-            sim_output, config, window=window_duration, sample_dt=0.01, rate=False, return_mask=True
+            sim_output, config,
+            window=window_duration, sample_dt=0.01,
+            rate=False, return_mask=True,
+            fraction_weighting=False  # ensure raw distances
         )
+
         all_dist_diffusive.extend(diff_d)
         all_dist_driven.extend(driv_d)
         total_windows += len(mask)
         total_driven_windows += int(mask.sum())
 
-    # ---- print % of 4-s tracks with any driven motion ----
+    # ---- compute and print fraction of tracks with driven motion ----
     if total_windows > 0:
-        pct_driven = 100.0 * total_driven_windows / total_windows
+        driven_fraction = total_driven_windows / total_windows
+        pct_driven = 100.0 * driven_fraction
         print(f"\n4-s tracks with ANY driven motion: {pct_driven:.2f}%  "
               f"({total_driven_windows}/{total_windows} windows)")
     else:
         print("\nNo 4-s windows found.")
+        return
+
+    # ---- apply weights ----
+    diff_weight = 1.0 - driven_fraction
+    driv_weight = driven_fraction
+
+    all_dist_diffusive = np.asarray(all_dist_diffusive) * diff_weight
+    all_dist_driven    = np.asarray(all_dist_driven)   * driv_weight
 
     # Convert meters -> micrometers
-    all_dist_diffusive_um = np.asarray(all_dist_diffusive) * 1e6
-    all_dist_driven_um    = np.asarray(all_dist_driven)   * 1e6
+    all_diff_um = all_dist_diffusive * 1e6
+    all_driv_um = all_dist_driven    * 1e6
 
-    # Non-zero subsets (avoid log(0) bins)
-    dist_diffusive_nz = all_dist_diffusive_um[all_dist_diffusive_um > 0]
-    dist_driven_nz    = all_dist_driven_um[all_dist_driven_um > 0]
+    # Non-zero subsets for log-binned hist
+    diff_nz = all_diff_um[all_diff_um > 0]
+    driv_nz = all_driv_um[all_driv_um > 0]
 
-    if dist_diffusive_nz.size == 0 and dist_driven_nz.size == 0:
+    if diff_nz.size == 0 and driv_nz.size == 0:
         print("Warning: No non-zero distances found. Skipping histogram plot.")
         return
 
-    all_nz = np.concatenate([a for a in (dist_diffusive_nz, dist_driven_nz) if a.size])
+    all_nz = np.concatenate([a for a in (diff_nz, driv_nz) if a.size])
     bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), 60)
 
     plt.figure()
-    if dist_diffusive_nz.size:
-        w = np.ones_like(dist_diffusive_nz) / dist_diffusive_nz.size * 100
-        plt.hist(dist_diffusive_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black', label='Diffusive (per 4 s)')
-
-    if dist_driven_nz.size:
-        w = np.ones_like(dist_driven_nz) / dist_driven_nz.size * 100
-        plt.hist(dist_driven_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black', label='Driven (per 4 s)')
+    if diff_nz.size:
+        w = np.ones_like(diff_nz) / diff_nz.size * 100
+        plt.hist(diff_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black',
+                 label='Diffusive (weighted per 4 s)')
+    if driv_nz.size:
+        w = np.ones_like(driv_nz) / driv_nz.size * 100
+        plt.hist(driv_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black',
+                 label='Driven (weighted per 4 s)')
 
     plt.xscale('log')
     plt.xlabel(r"Distance per 4-s window ($\mu$m)")
     plt.ylabel("Percentage")
-    plt.title(f"Distribution of 4-Second Distances over {config.n_particles} particles")
+    plt.title(f"Distribution of 4-Second Distances over {config.n_particles} particles\n"
+              f"(weights: driven={driven_fraction:.3f}, diffusive={1.0-driven_fraction:.3f})")
     plt.gca().yaxis.set_major_formatter(PercentFormatter())
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.show()
+
+    # Optional: print paper-style Φ values (μm per 4 s)
+    phi_diff_um = all_diff_um.mean()
+    phi_driv_um = all_driv_um.mean()
+    print(f"\nΦ_diffusive ≈ {phi_diff_um:.3f} μm per 4 s,  Φ_directed ≈ {phi_driv_um:.3f} μm per 4 s")
+
 
 
 
