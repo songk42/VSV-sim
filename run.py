@@ -10,7 +10,7 @@ from matplotlib.ticker import PercentFormatter
 from tqdm import tqdm
 import simulation as sim
 import visualize as vis
-from analysis import plot_displacement_vs_time_line, compute_flux_4s_trapaware
+from analysis import plot_displacement_vs_time_line, compute_flux_4s
 # at top
 from simulation import D
 
@@ -263,7 +263,7 @@ def plot_flux_distribution(config,
     from tqdm import tqdm
 
     import simulation as sim
-    from analysis import compute_flux_4s_trapaware
+    from analysis import compute_flux_4s
 
     all_dist_diffusive = []
     all_dist_driven = []
@@ -276,7 +276,7 @@ def plot_flux_distribution(config,
         sim_output = sim.move(config, theta=theta, stop_on_cell_exit=False)
 
         # IMPORTANT: no weighting inside; get raw meters PER WINDOW
-        diff_d, driv_d, mask = compute_flux_4s_trapaware(
+        diff_d, driv_d, mask = compute_flux_4s(
             sim_output, config,
             window=window_duration, sample_dt=0.01,
             rate=False, return_mask=True,

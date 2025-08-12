@@ -198,12 +198,6 @@ def plot_displacement_vs_time_line(
             # Plot
             plt.plot(t, mean_signed, label=p_driv, color=colors[i])
 
-# python
-# core/sim_new/analysis.py
-import numpy as np
-
-# analysis.py
-
 import numpy as np
 
 def compute_flux_4s(
@@ -213,99 +207,7 @@ def compute_flux_4s(
         *,
         sample_dt: float = 0.01,
         rate: bool = True,
-        use_e2e_for_any_driven: bool = True,
         return_mask: bool = False,
-):
-    """
-    Compute diffusive/driven flux per non-overlapping 'window' seconds on a fixed sample grid.
-
-    Window classification:
-      • If a window contains ANY driven frames -> classify as DRIVEN and (if use_e2e_for_any_driven)
-        use END-TO-END distance over the whole window for the driven contribution; diffusive=0.
-      • Otherwise (all frames diffusive) -> classify as DIFFUSIVE and sum path-length within the window.
-
-    Returns:
-      diff_flux, driv_flux   (m/s if rate=True, else meters per window)
-      If return_mask=True, also returns driven_window_mask (bool array, len = n_windows).
-    """
-    # --- build 0.01 s time grid and state ---
-    t_end = (len(sim_output.x) - 1) * cfg.dt
-
-    if (hasattr(sim_output, "t_01s") and hasattr(sim_output, "state_01s")
-            and abs(sample_dt - 0.01) < 1e-12):
-        t_samples  = sim_output.t_01s
-        state_samp = sim_output.state_01s.astype(bool)
-        keep = t_samples <= t_end + 1e-12
-        t_samples  = t_samples[keep]
-        state_samp = state_samp[keep]
-    else:
-        t_samples = np.round(np.arange(0.0, t_end + 1e-12, sample_dt), 2)
-        if hasattr(sim_output, "state_dt"):
-            idx = np.minimum((t_samples / cfg.dt).astype(np.int64), len(sim_output.state_dt) - 1)
-            state_samp = sim_output.state_dt[idx].astype(bool)
-        else:
-            raise ValueError("No state track available. Return state_dt or (t_01s,state_01s) from move().")
-
-    # --- sample positions onto same grid ---
-    t_orig = np.arange(len(sim_output.x)) * cfg.dt
-    x_samp = np.interp(t_samples, t_orig, sim_output.x)
-    y_samp = np.interp(t_samples, t_orig, sim_output.y)
-
-    # --- windowing ---
-    pts_per_win = int(round(window / sample_dt))
-    n_windows   = (len(t_samples) - 1) // pts_per_win  # need at least one step per window
-
-    diff_flux = np.zeros(n_windows, dtype=float)
-    driv_flux = np.zeros(n_windows, dtype=float)
-    driven_mask = np.zeros(n_windows, dtype=bool)
-
-    for w in range(n_windows):
-        s = w * pts_per_win
-        e = s + pts_per_win
-        seg_state = state_samp[s:e]                 # states for the steps in the window (length pts_per_win)
-        has_driven = bool(seg_state.any())
-        driven_mask[w] = has_driven
-
-        if has_driven and use_e2e_for_any_driven:
-            # END-TO-END distance over the entire window
-            dx = x_samp[e] - x_samp[s]
-            dy = y_samp[e] - y_samp[s]
-            d_driv = float(np.hypot(dx, dy))
-            d_diff = 0.0
-        else:
-            # Path-length sum of steps; attribute all steps to diffusive if no driven present
-            step_dists = np.hypot(np.diff(x_samp[s:e+1]), np.diff(y_samp[s:e+1]))
-            if has_driven:
-                # If not using E2E, split by state (legacy behavior)
-                d_diff = step_dists[~seg_state].sum()
-                d_driv = step_dists[ seg_state].sum()
-            else:
-                d_diff = step_dists.sum()
-                d_driv = 0.0
-
-        if rate:
-            d_diff /= window
-            d_driv /= window
-
-        diff_flux[w] = d_diff
-        driv_flux[w] = d_driv
-
-    if return_mask:
-        return diff_flux, driv_flux, driven_mask
-    return diff_flux, driv_flux
-
-# ----- analysis.py -----
-import numpy as np
-
-def compute_flux_4s_trapaware(
-        sim_output,
-        cfg,
-        window: float = 4.0,
-        *,
-        sample_dt: float = 0.01,
-        rate: bool = True,
-        return_mask: bool = False,
-        # NEW: paper-style weighting
         fraction_weighting: bool = True,
         driven_fraction: float = 0.0368,  # 3.68% time in driven state
 ):
@@ -392,7 +294,7 @@ def compute_flux_4s_trapaware(
             d_diff /= window
             d_driv /= window
 
-        # --- NEW: apply paper-style time-fraction weighting per state ---
+        # Apple weighting per state --y
         if fraction_weighting:
             d_diff *= diff_weight
             d_driv *= driv_weight
