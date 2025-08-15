@@ -17,7 +17,7 @@ Kb = 1.38064852e-23 # Boltzmann constant
 T = 37 + 273.15 # K
 g = 6 * np.pi * eta * R  # viscous drag coefficient
 D = Kb * T / g # diffusivity coefficient via Stokes-Einstein equation
-k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
+k = 1.5e-6 # spring constant; N/m
 
 CELL_RADIUS = 1.502e-5  # radius of cell (m)
 NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
@@ -25,6 +25,7 @@ TRAP_SIZE = 2.4e-7  # size of trap (m)
 TIME_BETWEEN_STATES = 0.03 # 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
+# distance between traps (m)
 TRAP_DIST_ALPHA = 1.40896797409667
 TRAP_DIST_LOC = 0.04298463673860459
 TRAP_DIST_SCALE = 0.13924626080385946
@@ -32,7 +33,7 @@ TRAP_DIST = scipy.stats.gamma(
     TRAP_DIST_ALPHA,
     loc=TRAP_DIST_LOC,
     scale=TRAP_DIST_SCALE,
-)  # distance between traps (m)
+)  
 
 def timing(func):
     @wraps(func)
