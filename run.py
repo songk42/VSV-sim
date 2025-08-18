@@ -251,7 +251,7 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.show()
 
 
-def plot_flux_distribution(config,window_duration: int = 4):
+def plot_flux_distribution(config, window_duration: int = 4):
     """
     Plot the distribution of 4‑second flux values in **micrometers** for every particle.
 
@@ -280,10 +280,8 @@ def plot_flux_distribution(config,window_duration: int = 4):
     from analysis import compute_flux_4s
 
     # Accumulate flux values from every particle
-    all_dist_diffusive = []
-    all_dist_driven = []
-    total_windows = 0
-    total_driven_windows = 0
+    all_dist_diffusive, all_dist_driven = [], []
+    total_windows = total_driven_windows = 0
 
     # ---- collect raw (unweighted) per-window distances ----
     for i in tqdm(range(config.n_particles), desc="Calculating 4-s distances", unit="particle"):
@@ -302,67 +300,84 @@ def plot_flux_distribution(config,window_duration: int = 4):
         total_windows += len(mask)
         total_driven_windows += int(mask.sum())
 
-    # ---- compute and print fraction of tracks with driven motion ----
-    if total_windows > 0:
-        driven_fraction = total_driven_windows / total_windows
-        pct_driven = 100.0 * driven_fraction
-        print(f"\n4-s tracks with ANY driven motion: {pct_driven:.2f}%  "
-              f"({total_driven_windows}/{total_windows} windows)")
-    else:
+    if total_windows == 0:
         print("\nNo 4-s windows found.")
         return
 
-    # ---- apply weights ----
-    diff_weight = 1.0 - driven_fraction
-    driv_weight = driven_fraction
+    # ---- measured mixture weights ----
+    driv_weight = total_driven_windows / total_windows
+    diff_weight = 1.0 - driv_weight
+    print(f"\n4-s windows with ANY driven motion: {100*driv_weight:.2f}%"
+          f"  ({total_driven_windows}/{total_windows})")
 
-    all_dist_diffusive = np.asarray(all_dist_diffusive) * diff_weight
-    all_dist_driven    = np.asarray(all_dist_driven)   * driv_weight
+    # Convert meters -> micrometers and scale sample values ----
+    diff_um = np.asarray(all_dist_diffusive, float) * 1e6 * diff_weight
+    driv_um = np.asarray(all_dist_driven,    float) * 1e6 * driv_weight
 
-    # Convert meters -> micrometers
-    all_diff_um = all_dist_diffusive * 1e6
-    all_driv_um = all_dist_driven    * 1e6
+    # ---- report means and weighted contributions (μm per 4 s) ----
+    # (means before value scaling)
+    mu_diff = (diff_um / max(diff_weight, 1e-12)).mean() if diff_um.size else 0.0
+    mu_driv = (driv_um / max(driv_weight, 1e-12)).mean() if driv_um.size else 0.0
+    phi_total = diff_weight * mu_diff + driv_weight * mu_driv
+    print(f"\nΦ_diffusive (unweighted) ≈ {mu_diff:.3f} μm per 4 s")
+    print(f"Φ_directed  (unweighted) ≈ {mu_driv:.3f} μm per 4 s")
+    print(f"Φ_total (weighted)       ≈ {phi_total:.3f} μm per 4 s")
 
-    # Non-zero subsets for log-binned hist
-    diff_nz = all_diff_um[all_diff_um > 0]
-    driv_nz = all_driv_um[all_driv_um > 0]
-
+    # ---- prepare data for log-space area normalization ----
+    diff_nz = diff_um[diff_um > 0]
+    driv_nz = driv_um[driv_um > 0]
     if diff_nz.size == 0 and driv_nz.size == 0:
-        print("Warning: No non-zero distances found. Skipping histogram plot.")
+        print("Warning: No positive distances after scaling; skipping histogram.")
         return
 
+    # Check for data incompatible with log plot
     all_nz = np.concatenate([a for a in (diff_nz, driv_nz) if a.size])
-    bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), 60)
+    x_min, x_max = float(all_nz.min()), float(all_nz.max())
+    if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min <= 0:
+        print("Invalid range for log histogram.")
+        return
 
+    # Create log-spaced bins
+    bins = np.logspace(np.log10(x_min), np.log10(x_max), 60)
+    log_step_size = np.diff(np.log(bins))
+
+    def logspace_density_percent(data, bins, log_step_size):
+        """Return heights so that graph takes up area of 1"""
+        counts, _ = np.histogram(data, bins=bins)
+        N = counts.sum() if counts.sum() > 0 else 1
+        heights = counts / (N * log_step_size)     # density per log-x unit
+        return heights * 100.0                     # convert to percent
+
+    y_diff = logspace_density_percent(diff_nz, bins, log_step_size) if diff_nz.size else None
+    y_driv = logspace_density_percent(driv_nz, bins, log_step_size) if driv_nz.size else None
+
+    # ---- plot as bars so area on a log-x axis is height * log_step_size ----
     plt.figure()
-    if diff_nz.size:
-        w = np.ones_like(diff_nz) / diff_nz.size * 100
-        plt.hist(diff_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black',
-                 label='Diffusive (weighted per 4 s)')
-    if driv_nz.size:
-        w = np.ones_like(driv_nz) / driv_nz.size * 100
-        plt.hist(driv_nz, bins=bins, weights=w, alpha=0.7, edgecolor='black',
-                 label='Driven (weighted per 4 s)')
+    lefts = bins[:-1]
+    widths = bins[1:] - bins[:-1]
+
+    if y_diff is not None:
+        plt.bar(lefts, y_diff, width=widths, align='edge',
+                alpha=0.7, edgecolor='black',
+                label=f'Diffusive (values × {diff_weight:.3f})')
+    if y_driv is not None:
+        plt.bar(lefts, y_driv, width=widths, align='edge',
+                alpha=0.7, edgecolor='black',
+                label=f'Driven (values × {driv_weight:.3f})')
 
     plt.xscale('log')
-    plt.xlabel(r"Distance per 4-s window ($\mu$m)")
+    plt.xlabel(r"Distance per 4-s window ($\mu$m) (weighted by state amount)")
     plt.ylabel("Percentage")
+    plt.gca().yaxis.set_major_formatter(PercentFormatter(100))  # our heights are % already
     plt.title(f"Distribution of 4-Second Distances over {config.n_particles} particles\n"
-              f"(weights: driven={driven_fraction:.3f}, diffusive={1.0-driven_fraction:.3f})")
-    plt.gca().yaxis.set_major_formatter(PercentFormatter())
+              f"(weights: driven={driv_weight:.3f}, diffusive={diff_weight:.3f})")
+
+
+
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.show()
-
-    # Optional: print paper-style Φ values (μm per 4 s)
-    phi_diff_um = all_diff_um.mean()
-    phi_driv_um = all_driv_um.mean()
-    print(f"\nΦ_diffusive ≈ {phi_diff_um:.3f} μm per 4 s,  Φ_directed ≈ {phi_driv_um:.3f} μm per 4 s")
-
-
-
-
 
 
 if __name__ == "__main__":
