@@ -35,12 +35,8 @@ def parse_arguments() -> argparse.Namespace:
         help='Probability of driven motion (0.0-1.0)'
     )
     sim_group.add_argument(
-        '--trap_dist', type=float, default=sim.TRAP_DIST,
+        '--trap_dist', type=str, default="default",
         help=f'Distance between traps (meters) (default: {sim.TRAP_DIST})'
-    )
-    sim_group.add_argument(
-        '--trap_std', type=float, default=sim.TRAP_STD,
-        help=f'Standard deviation of trap distance (meters) (default: {sim.TRAP_STD})'
     )
     sim_group.add_argument(
         '--time_between', type=float, default=sim.TIME_BETWEEN_STATES,
@@ -114,8 +110,8 @@ def validate_arguments(args: argparse.Namespace) -> bool:
         errors.append("width and height must be positive")
 
     # Validate optional parameters
-    if args.trap_dist is not None and args.trap_dist <= 0:
-        errors.append("trap_dist must be positive")
+    # if args.trap_dist is not None and args.trap_dist <= 0:
+    #     errors.append("trap_dist must be positive")
     if args.time_between is not None and args.time_between <= 0:
         errors.append("time_between must be positive")
 
@@ -255,10 +251,7 @@ def generate_displacement_time_driven_graph(n_particles = 50, dt = 0.001, total_
         plt.show()
 
 
-def plot_flux_distribution(config,
-                           snapshot_interval: float = 0.01,
-                           window_duration: int = 4,
-                           diffusive_threshold: float = 2.5e-9):
+def plot_flux_distribution(config, window_duration: int = 4):
     """
     Plot the distribution of 4‑second flux values in **micrometers** for every particle.
 
@@ -287,61 +280,104 @@ def plot_flux_distribution(config,
     from analysis import compute_flux_4s
 
     # Accumulate flux values from every particle
-    all_flux_diffusive = []
-    all_flux_driven = []
+    all_dist_diffusive, all_dist_driven = [], []
+    total_windows = total_driven_windows = 0
 
-    for i in tqdm(range(config.n_particles), desc="Calculating 4‑s flux", unit="particle"):
+    # ---- collect raw (unweighted) per-window distances ----
+    for i in tqdm(range(config.n_particles), desc="Calculating 4-s distances", unit="particle"):
         theta = 2 * np.pi * i / config.n_particles
-        sim_output = sim.move(config, theta=theta)
+        sim_output = sim.move(config, theta=theta, stop_on_cell_exit=False)
 
-        flux_diffusive = compute_flux_4s(sim_output,
-                                         config,
-                                         snapshot_interval,
-                                         window_duration,
-                                         diffusive_threshold)
-        flux_driven = sim_output.distance_driven
+        # get raw meters per window
+        diff_d, driv_d, mask = compute_flux_4s(
+            sim_output, config,
+            window=window_duration, sample_dt=0.01,
+            rate=False, return_mask=True
+        )
 
-        all_flux_diffusive.extend(flux_diffusive)
-        all_flux_driven.extend(flux_driven)
+        all_dist_diffusive.extend(diff_d)
+        all_dist_driven.extend(driv_d)
+        total_windows += len(mask)
+        total_driven_windows += int(mask.sum())
 
-    # ---------- Convert from meters → micrometers ----------
-    all_flux_diffusive_um = np.asarray(all_flux_diffusive) * 1e6  # μm
-    all_flux_driven_um = np.asarray(all_flux_driven) * 1e6        # μm
+    if total_windows == 0:
+        print("\nNo 4-s windows found.")
+        return
 
-    # ---------- Histogram settings ----------
-    weights_diffusive = np.ones_like(all_flux_diffusive_um) / len(all_flux_diffusive_um) * 100
-    weights_driven = np.ones_like(all_flux_driven_um) / len(all_flux_driven_um) * 100
+    # ---- measured mixture weights ----
+    driv_weight = total_driven_windows / total_windows
+    diff_weight = 1.0 - driv_weight
+    print(f"\n4-s windows with ANY driven motion: {100*driv_weight:.2f}%"
+          f"  ({total_driven_windows}/{total_windows})")
 
-    # Remove zeros for log‑spaced bins
-    flux_diffusive_nz = all_flux_diffusive_um[all_flux_diffusive_um > 0]
-    flux_driven_nz = all_flux_driven_um[all_flux_driven_um > 0]
-    all_nz = np.concatenate([flux_diffusive_nz, flux_driven_nz])
+    # Convert meters -> micrometers and scale sample values ----
+    diff_um = np.asarray(all_dist_diffusive, float) * 1e6 * diff_weight
+    driv_um = np.asarray(all_dist_driven,    float) * 1e6 * driv_weight
 
-    num_bins = 60
-    bins = np.logspace(np.log10(all_nz.min()), np.log10(all_nz.max()), num_bins)
+    # ---- report means and weighted contributions (μm per 4 s) ----
+    # (means before value scaling)
+    mu_diff = (diff_um / max(diff_weight, 1e-12)).mean() if diff_um.size else 0.0
+    mu_driv = (driv_um / max(driv_weight, 1e-12)).mean() if driv_um.size else 0.0
+    phi_total = diff_weight * mu_diff + driv_weight * mu_driv
+    print(f"\nΦ_diffusive (unweighted) ≈ {mu_diff:.3f} μm per 4 s")
+    print(f"Φ_directed  (unweighted) ≈ {mu_driv:.3f} μm per 4 s")
+    print(f"Φ_total (weighted)       ≈ {phi_total:.3f} μm per 4 s")
 
-    # -- Print summary statistics --
-    print(f"Diffusive flux values (μm): mean {np.mean(all_flux_diffusive_um):.4e}, std {np.std(all_flux_diffusive_um):.4e}")
-    print(f"Driven flux values (μm): mean {np.mean(all_flux_driven_um):.4e}, std {np.std(all_flux_driven_um):.4e}")
+    # ---- prepare data for log-space area normalization ----
+    diff_nz = diff_um[diff_um > 0]
+    driv_nz = driv_um[driv_um > 0]
+    if diff_nz.size == 0 and driv_nz.size == 0:
+        print("Warning: No positive distances after scaling; skipping histogram.")
+        return
 
-    # ---------- Plot ----------
+    # Check for data incompatible with log plot
+    all_nz = np.concatenate([a for a in (diff_nz, driv_nz) if a.size])
+    x_min, x_max = float(all_nz.min()), float(all_nz.max())
+    if not np.isfinite(x_min) or not np.isfinite(x_max) or x_min <= 0:
+        print("Invalid range for log histogram.")
+        return
+
+    # Create log-spaced bins
+    bins = np.logspace(np.log10(x_min), np.log10(x_max), 60)
+    log_step_size = np.diff(np.log(bins))
+
+    def logspace_density_percent(data, bins, log_step_size):
+        """Return heights so that graph takes up area of 1"""
+        counts, _ = np.histogram(data, bins=bins)
+        N = counts.sum() if counts.sum() > 0 else 1
+        heights = counts / (N * log_step_size)     # density per log-x unit
+        return heights * 100.0                     # convert to percent
+
+    y_diff = logspace_density_percent(diff_nz, bins, log_step_size) if diff_nz.size else None
+    y_driv = logspace_density_percent(driv_nz, bins, log_step_size) if driv_nz.size else None
+
+    # ---- plot as bars so area on a log-x axis is height * log_step_size ----
     plt.figure()
+    lefts = bins[:-1]
+    widths = bins[1:] - bins[:-1]
 
-    plt.hist(all_flux_diffusive_um, bins=bins, weights=weights_diffusive,
-             color='blue', alpha=0.7, edgecolor='black', label='Diffusive Flux')
-    plt.hist(all_flux_driven_um, bins=bins, weights=weights_driven,
-             color='red',  alpha=0.7, edgecolor='black', label='Driven Flux')
+    if y_diff is not None:
+        plt.bar(lefts, y_diff, width=widths, align='edge',
+                alpha=0.7, edgecolor='black',
+                label=f'Diffusive (values × {diff_weight:.3f})')
+    if y_driv is not None:
+        plt.bar(lefts, y_driv, width=widths, align='edge',
+                alpha=0.7, edgecolor='black',
+                label=f'Driven (values × {driv_weight:.3f})')
 
     plt.xscale('log')
-    plt.xlabel(r"Flux ($\mu$m)")
+    plt.xlabel(r"Distance per 4-s window ($\mu$m) (weighted by state amount)")
     plt.ylabel("Percentage")
-    plt.title("Distribution of 4‑Second Flux Values")
-    plt.gca().yaxis.set_major_formatter(PercentFormatter())  # y‑axis in %
+    plt.gca().yaxis.set_major_formatter(PercentFormatter(100))  # our heights are % already
+    plt.title(f"Distribution of 4-Second Distances over {config.n_particles} particles\n"
+              f"(weights: driven={driv_weight:.3f}, diffusive={diff_weight:.3f})")
+
+
+
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
     plt.show()
-
 
 
 if __name__ == "__main__":
