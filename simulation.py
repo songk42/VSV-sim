@@ -21,7 +21,6 @@ k = random.uniform(1.5e-6, 2.6e-6) # spring constant; N/m
 
 CELL_RADIUS = 1.502e-5  # radius of cell (m)
 NUCLEUS_RADIUS = 5e-6  # radius of cell nucleus (m)
-TRAP_SIZE = 2.4e-7  # size of trap (m)
 TIME_BETWEEN_STATES = 0.03 # 0.41  # average time between states (s)
 MOTOR_PROTEIN_SPEED = 1e-6  # speed of motor proteins (m/s)
 
@@ -350,7 +349,9 @@ def _move(total_time, dt,theta, stop_on_cell_exit,
 
         # Check for cell exit
         if np.hypot(new_x, new_y) > CELL_RADIUS:
-            exit_time = current_time
+            # Only record the FIRST exit time
+            if exit_time == -1.0:
+                exit_time = current_time
             final_i   = i
             if stop_on_cell_exit:
                 break
