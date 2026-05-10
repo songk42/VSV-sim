@@ -1,4 +1,6 @@
-# VSV-sim
+# Simulation of Motor-Enhanced Brownian Motion
+
+Motor-Enhanced Brownian Motion (MERM) is a form of intracellular motion where (1) particles are trapped by a mesh of cytoskeletal elements and other intracellular elements, (2) they move by hopping from trap to trap or by movement of traps in random directions, and (3) movement is dependent on cytoskeletal motors and cellular energy. This is a simple simulation to investigate the effects of MERM vs. other forms of intracellular transport. See `sim-paper.pdf` for more details.
 
 ## Files
 `run.py` - the main script to run the simulation. Example call for computing w/o visuals:
